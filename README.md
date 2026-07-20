@@ -31,17 +31,42 @@ cp .env.example .env && nano .env
 
 | Command | Description |
 |---------|-------------|
-| `init` | Install Hermes, write config.yaml, set up Discord, run diagnostics |
+| `init` | Install Hermes, write config.yaml, install skills, set up Discord, run diagnostics |
 | `start` | Start Docker services → Hermes gateway → dashboard |
 | `stop` | Stop dashboard → gateway → Docker services |
 | `restart` | Stop then start |
 | `status` | Show all service states |
+| `docker logs [svc]` | Tail container logs (default: zen-proxy) |
+| `docker rebuild` | Rebuild zen-proxy image |
+| `docker shell [svc]` | Open shell in container |
+| `docker ps` | List containers |
+| `docker prune` | Clean up unused Docker resources |
+
+## Skills
+
+Skills in `skills/` are installed to `~/.hermes/skills/` during `init`. Currently includes:
+
+| Skill | Description |
+|-------|-------------|
+| `i-have-adhd` | ADHD-friendly output formatting (action-first, no preamble, numbered steps) |
+
+To auto-load a skill in a Discord channel, uncomment and fill in `channel_skill_bindings` in `default-config.yaml`:
+
+```yaml
+discord:
+  channel_skill_bindings:
+    - id: "YOUR_CHANNEL_ID"
+      skills:
+        - i-have-adhd
+```
+
+Then run `./scripts/hermes.sh init && hermes gateway restart`.
 
 ## Layout
 
 ```
 scripts/
-└── hermes.sh       # Single entry point for all management tasks
+├── hermes.sh       # Single entry point for all management tasks
 docker/
 ├── docker-compose.yml   # Zen proxy + SearXNG
 ├── .env                 # API keys (git-ignored)
@@ -49,6 +74,9 @@ docker/
     ├── main.py          # Credit-aware proxy (FastAPI)
     ├── Dockerfile       # Proxy container
     └── requirements.txt # Python deps
+skills/
+└── i-have-adhd/
+    └── SKILL.md          # ADHD-friendly output formatting skill
 ```
 
 ## Init Presets

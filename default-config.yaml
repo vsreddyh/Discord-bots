@@ -111,6 +111,10 @@ discord:
       - "Checking on that now."
       - "Give me a sec."
       - "On it."
+  channel_skill_bindings:
+    - id: "${DISCORD_HOME_CHANNEL}"
+      skills:
+        - i-have-adhd
 
 platform_toolsets:
   cli:

@@ -26,6 +26,7 @@ Commands:
   stop              Stop dashboard → gateway → Zen proxy
   restart           Stop then start
   status            Show all service states
+  docker <action>   Docker management (logs, rebuild, shell, ps, prune)
 EOF
 }
 
@@ -102,6 +103,23 @@ cmd_init() {
         sed -i 's/"hermes-telegram", "hermes-discord"/"hermes-telegram", "hermes-god"/' "$TOOLSETS_PY"
 
         info "hermes-god toolset patched."
+    fi
+
+    PROJECT_SKILLS="$SCRIPT_DIR/../skills"
+    if [[ -d "$PROJECT_SKILLS" ]]; then
+        info "Copying project skills to $HERMES_HOME/skills/ ..."
+        for skill_dir in "$PROJECT_SKILLS"/*/; do
+            skill_name="$(basename "$skill_dir")"
+            target="$HERMES_HOME/skills/$skill_name"
+            if [[ -d "$target" ]]; then
+                info "  Skill '$skill_name' already exists — skipping."
+            else
+                cp -r "$skill_dir" "$target"
+                info "  Installed skill: $skill_name"
+            fi
+        done
+    else
+        info "No project skills directory found — skipping."
     fi
 
     PROJECT_ENV="$SCRIPT_DIR/../.env"
@@ -324,6 +342,55 @@ cmd_status() {
 }
 
 # ────────────────────────────────────────────────────────────
+# DOCKER
+# ────────────────────────────────────────────────────────────
+cmd_docker() {
+    local action="${1:-help}"
+    shift 2>/dev/null || true
+
+    case "$action" in
+        logs)
+            local svc="${1:-zen-proxy}"
+            docker compose -f "$DOCKER_DIR/docker-compose.yml" logs -f "$svc"
+            ;;
+        rebuild)
+            info "Rebuilding zen-proxy..."
+            docker compose -f "$DOCKER_DIR/docker-compose.yml" build --no-cache zen-proxy
+            info "Restarting..."
+            docker compose -f "$DOCKER_DIR/docker-compose.yml" up -d zen-proxy
+            ;;
+        shell)
+            local svc="${1:-zen-proxy}"
+            docker compose -f "$DOCKER_DIR/docker-compose.yml" exec "$svc" sh
+            ;;
+        ps)
+            docker compose -f "$DOCKER_DIR/docker-compose.yml" ps
+            ;;
+        prune)
+            info "Pruning unused Docker resources..."
+            docker system prune -f --volumes 2>&1 || warn "Prune had issues."
+            ;;
+        help|--help|-h)
+            cat <<EOF
+Usage: $(basename "$0") docker <action>
+
+Actions:
+  logs [svc]     Tail logs (default: zen-proxy)
+  rebuild        Rebuild zen-proxy image
+  shell [svc]    Open shell in container (default: zen-proxy)
+  ps             List containers
+  prune          Clean up unused Docker resources
+EOF
+            ;;
+        *)
+            error "Unknown docker action: $action"
+            cmd_docker help
+            exit 1
+            ;;
+    esac
+}
+
+# ────────────────────────────────────────────────────────────
 # MAIN
 # ────────────────────────────────────────────────────────────
 case "${1:-help}" in
@@ -332,6 +399,7 @@ case "${1:-help}" in
     stop)    cmd_stop ;;
     restart) cmd_restart ;;
     status)  cmd_status ;;
+    docker)  shift; cmd_docker "$@" ;;
     help|--help|-h) usage ;;
     *)       error "Unknown command: $1" && usage && exit 1 ;;
 esac
