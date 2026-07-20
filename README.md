@@ -1,80 +1,74 @@
 # Hermes Agent Scripts
 
-Scripts to manage all [Hermes Agent](https://hermes-agent.nousresearch.com/) services — gateway, dashboard, and status.
+Scripts to manage [Hermes Agent](https://hermes-agent.nousresearch.com/) with a credit-aware proxy that routes through OpenCode Zen and falls back to DeepInfra on credit/payment errors.
 
 ## Prerequisites
 
-- [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) installed (run `init.sh` or install via `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`)
-- API keys or OAuth configured (via env vars with `init.sh`, or manually with `hermes auth`)
+- [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) installed (run `./scripts/hermes.sh init`)
+- [Docker](https://docs.docker.com/engine/install/) and Docker Compose
+- `OPENCODE_API_KEY` set in `.env`
 
-## Usage
+## Quick Start
 
 ```bash
-# Initial setup (install + write preset configs)
-HERMES_PROVIDER=openrouter \
-HERMES_MODEL=deepseek/deepseek-chat-v3-0324:free \
-HERMES_API_KEY=sk-or-v1-... \
-./scripts/init.sh
+# 1. Set up API keys
+cp .env.example .env && nano .env
 
-# Start all services (gateway + dashboard)
-./scripts/start.sh
+# 2. Init Hermes config (installs Hermes + writes configs)
+./scripts/hermes.sh init
 
-# Show status of all services
-./scripts/status.sh
+# 3. Start everything (proxy → gateway → dashboard)
+./scripts/hermes.sh start
 
-# Stop all services (dashboard + gateway)
-./scripts/stop.sh
+# 4. Check status
+./scripts/hermes.sh status
 
-# Restart all services
-./scripts/restart.sh
+# 5. Stop everything
+./scripts/hermes.sh stop
 ```
 
-## Scripts
+## Commands
 
-| Script | Description |
-|--------|-------------|
-| `init.sh` | Install Hermes (if missing), write `config.yaml` and `.env` from env vars, run diagnostics |
-| `start.sh` | Start gateway + dashboard in background |
-| `status.sh` | Show gateway, dashboard, and profile status |
-| `stop.sh` | Stop dashboard + gateway gracefully |
-| `restart.sh` | Stop then start |
+| Command | Description |
+|---------|-------------|
+| `init` | Install Hermes, write config.yaml, set up Discord, run diagnostics |
+| `start` | Start Docker services → Hermes gateway → dashboard |
+| `stop` | Stop dashboard → gateway → Docker services |
+| `restart` | Stop then start |
+| `status` | Show all service states |
+
+## Layout
+
+```
+scripts/
+└── hermes.sh       # Single entry point for all management tasks
+docker/
+├── docker-compose.yml   # Zen proxy + SearXNG
+├── .env                 # API keys (git-ignored)
+└── proxy/
+    ├── main.py          # Credit-aware proxy (FastAPI)
+    ├── Dockerfile       # Proxy container
+    └── requirements.txt # Python deps
+```
 
 ## Init Presets
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `HERMES_PROVIDER` | `openrouter` | LLM provider |
-| `HERMES_MODEL` | `deepseek/deepseek-chat-v3-0324:free` | Model name |
-| `HERMES_API_KEY` | (none) | Provider API key |
-| `HERMES_BASE_URL` | (none) | Custom endpoint URL |
+| `HERMES_PROVIDER` | `custom` | Provider (proxy on localhost:4000) |
+| `HERMES_MODEL` | `deepseek-v4-flash-free` | Model name |
+| `HERMES_API_KEY` | (none) | API key |
+| `HERMES_BASE_URL` | `http://localhost:4000/v1` | Proxy endpoint |
 | `HERMES_TERMINAL_BACKEND` | `local` | Terminal backend |
 | `HERMES_MAX_TURNS` | `90` | Max conversation turns |
 | `HERMES_REASONING` | `medium` | Reasoning effort |
 | `HERMES_MEMORY_ENABLED` | `false` | Enable cross-session memory |
 | `HERMES_DISABLED_TOOLSETS` | *(broad list)* | Toolsets to disable |
-| `HERMES_EXTRA_KEYS` | (none) | Semicolon-separated `KEY=val` pairs |
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HERMES_HOME` | `~/.hermes` | Hermes data directory |
-| `HERMES_DASHBOARD_PORT` | `9119` | Dashboard port |
-
-## Files
-
-| Path | Purpose |
-|------|---------|
-| `~/.hermes/dashboard.pid` | PID file for the running dashboard |
-| `~/.hermes/dashboard.log` | Dashboard stdout/stderr |
-| `~/.hermes/config.yaml` | Hermes configuration |
-| `~/.hermes/.env` | API keys and environment |
-| `~/.hermes/logs/gateway.log` | Gateway logs |
+| `HERMES_EXTRA_KEYS` | (none) | Semicolon-separated `KEY=val` |
 
 ## Troubleshooting
 
-- **Services won't start** — run `hermes doctor` to verify dependencies.
-- **Port in use** — set `HERMES_DASHBOARD_PORT` to a different value.
-- **Gateway fails** — check `~/.hermes/logs/gateway.log`. Ensure `sudo loginctl enable-linger $USER` is set for background service.
-- **Hermes not on PATH** — add `~/.local/bin` to `PATH` (installer adds this to `.bashrc`/`.zshrc`; source or restart shell).
-- **npm/web build errors** — `start.sh` uses `--skip-build` to avoid needing npm at runtime.
+- **Proxy won't start** — check `docker compose -f docker/docker-compose.yml logs zen-proxy`
+- **Hermes can't reach the proxy** — verify `http://localhost:4000/v1` is accessible (`curl localhost:4000/health`)
+- **Port in use** — change the port mapping in `docker/docker-compose.yml`
+- **Gateway fails** — check `~/.hermes/logs/gateway.log`, run `sudo loginctl enable-linger $USER`

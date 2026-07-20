@@ -1,0 +1,45 @@
+services:
+
+  # ──────────────────────────────────────────────────────
+  # Zen Proxy — Credit-aware OpenCode Zen → DeepInfra proxy
+  # ──────────────────────────────────────────────────────
+  zen-proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    env_file: ../.env
+    environment:
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY}
+      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────
+  # SearXNG — Private metasearch engine
+  # ──────────────────────────────────────────────────────
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "${SEARXNG_PORT:-8888}:8080"
+    environment:
+      SEARXNG_BASE_URL: https://${SEARXNG_HOSTNAME:-localhost}/
+      SEARXNG_SECRET_KEY: ${SEARXNG_SECRET_KEY:-}
+    volumes:
+      - searxng_data:/etc/searxng
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    restart: unless-stopped
+
+volumes:
+  searxng_data:
