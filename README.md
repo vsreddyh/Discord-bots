@@ -36,11 +36,6 @@ cp .env.example .env && nano .env
 | `stop` | Stop dashboard → gateway → Docker services |
 | `restart` | Stop then start |
 | `status` | Show all service states |
-| `docker logs [svc]` | Tail container logs (default: zen-proxy) |
-| `docker rebuild` | Rebuild zen-proxy image |
-| `docker shell [svc]` | Open shell in container |
-| `docker ps` | List containers |
-| `docker prune` | Clean up unused Docker resources |
 
 ## Skills
 
@@ -49,6 +44,7 @@ Skills in `skills/` are installed to `~/.hermes/skills/` during `init`. Currentl
 | Skill | Description |
 |-------|-------------|
 | `i-have-adhd` | ADHD-friendly output formatting (action-first, no preamble, numbered steps) |
+| `docker-management` | Manage Docker stack: zen-proxy, SearXNG, logs, health checks, cleanup |
 
 To auto-load a skill in a Discord channel, uncomment and fill in `channel_skill_bindings` in `default-config.yaml`:
 
@@ -75,8 +71,10 @@ docker/
     ├── Dockerfile       # Proxy container
     └── requirements.txt # Python deps
 skills/
-└── i-have-adhd/
-    └── SKILL.md          # ADHD-friendly output formatting skill
+├── i-have-adhd/
+│   └── SKILL.md          # ADHD-friendly output formatting skill
+└── docker-management/
+    └── SKILL.md          # Docker stack management skill
 ```
 
 ## Init Presets

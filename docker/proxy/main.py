@@ -104,19 +104,17 @@ async def _forward(
     )
 
 
-def _build_streaming_response(resp: httpx.Response) -> Response:
-    return Response(
-        content=resp.iter_bytes(),
-        status_code=resp.status_code,
-        headers={
-            "content-type": "text/event-stream",
-            "cache-control": "no-cache",
-            "x-accel-buffering": "no",
-        },
-    )
-
-
-def _build_json_response(resp: httpx.Response) -> JSONResponse:
+def _build_response(resp: httpx.Response, stream: bool) -> Response:
+    if stream:
+        return Response(
+            content=resp.iter_bytes(),
+            status_code=resp.status_code,
+            headers={
+                "content-type": "text/event-stream",
+                "cache-control": "no-cache",
+                "x-accel-buffering": "no",
+            },
+        )
     try:
         data = resp.json()
     except Exception:
@@ -150,23 +148,17 @@ async def chat_completions(request: Request):
     )
 
     if zen_resp.status_code < 400 or not _is_payment_error(zen_resp):
-        if stream:
-            return _build_streaming_response(zen_resp)
-        return _build_json_response(zen_resp)
+        return _build_response(zen_resp, stream)
 
     # ── Credit/payment error — try DeepInfra fallback ────────
     di_model = MODEL_MAP.get(model)
     if not di_model:
         logger.warning("No fallback mapping for model %s, returning Zen error", model)
-        if stream:
-            return _build_streaming_response(zen_resp)
-        return _build_json_response(zen_resp)
+        return _build_response(zen_resp, stream)
 
     if not DEEPINFRA_API_KEY:
         logger.warning("DEEPINFRA_API_KEY not set, cannot fall back")
-        if stream:
-            return _build_streaming_response(zen_resp)
-        return _build_json_response(zen_resp)
+        return _build_response(zen_resp, stream)
 
     logger.info("Credit error on %s via Zen — falling back to DeepInfra (%s)", model, di_model)
 
@@ -185,6 +177,4 @@ async def chat_completions(request: Request):
         stream,
     )
 
-    if stream:
-        return _build_streaming_response(di_resp)
-    return _build_json_response(di_resp)
+    return _build_response(di_resp, stream)

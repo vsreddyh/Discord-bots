@@ -115,6 +115,7 @@ discord:
     - id: "${DISCORD_HOME_CHANNEL}"
       skills:
         - i-have-adhd
+        - docker-management
 
 platform_toolsets:
   cli:
