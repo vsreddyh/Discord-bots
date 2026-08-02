@@ -101,6 +101,9 @@ onboarding:
 group_sessions_per_user: false
 
 discord:
+  require_mention: true
+  auto_thread: false
+  reactions: true
   voice_fx:
     enabled: true
     ambient_enabled: true
