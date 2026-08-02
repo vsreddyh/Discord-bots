@@ -40,7 +40,6 @@ searxng (:8888)  •  hermes-gateway (systemd user unit)  •  dashboard (:9119)
   `discord.auto_thread: false` so mentions reply inline instead of spawning threads,
   new conversation via the built-in `/reset` (alias `/new`) slash command.
 - Docs split: `README.md` = quick start; `documentation.md` = deep dive.
-- `future.md` and `profile-plans/` exist locally but are intentionally NOT committed.
 - `HERMES_MEMORY_ENABLED` default is `true` (hermes.sh line 44) — the old README said
   `false`, that was wrong.
 

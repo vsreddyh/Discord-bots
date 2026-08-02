@@ -17,4 +17,3 @@
 
 - See MEMORY.md for architecture, routing config, and gotchas.
 - `.env` is git-ignored; only `.env.example` is tracked.
-- `future.md` and `profile-plans/` are intentionally NOT committed.
