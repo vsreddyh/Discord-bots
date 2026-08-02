@@ -2,6 +2,17 @@
 
 Persistent context for AI agents working in this repo. Read this before making changes.
 
+## SANDBOX RULE (read first)
+
+This project is a **sandbox**. Never modify, restart, or touch live Hermes
+state on this machine (`~/.hermes/`, the `hermes` CLI, `hermes-gateway`
+systemd unit, `hermes dashboard`, or the live Docker stack). Work only inside
+this repo; the user applies changes to the live machine themselves. If a task
+requires live Hermes action, STOP and ask first. (Also codified in AGENTS.md.)
+
+Note: the 2026-08-02 config changes listed below were applied to the live
+machine at the user's request; do not assume live state matches this repo.
+
 ## What this project is
 
 `opencode-remote` runs [Hermes Agent](https://hermes-agent.nousresearch.com/) against a
