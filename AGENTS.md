@@ -36,6 +36,7 @@ searxng (:8888)  •  hermes-gateway (systemd user unit)  •  dashboard (:9119)
   `deepseek-v4-flash-free` → `deepseek-ai/DeepSeek-V4-Flash`,
   `mimo-v2.5-free` → `MiniMaxAI/MiniMax-M3`. Fallback fires on HTTP 402 or
   billing-keyword bodies (credits, quota exceeded, daily limit, ...).
+  `MODEL_MAP` and the static `/v1/models` list must stay in sync.
 - Discord routing: `DISCORD_ALLOW_ALL_USERS=true`, `group_sessions_per_user:
   false` (one shared conversation per channel), `discord.require_mention: true`,
   `discord.auto_thread: false` (inline replies, no threads), new conversation
@@ -43,6 +44,16 @@ searxng (:8888)  •  hermes-gateway (systemd user unit)  •  dashboard (:9119)
 - Env defaults live in `hermes.sh` `cmd_init` (e.g. `HERMES_MEMORY_ENABLED`
   defaults `true`, `HERMES_BASE_URL` `http://localhost:4000/v1`,
   `HERMES_MODEL` `deepseek-v4-flash-free`).
+- `default-config.yaml` is an `envsubst` TEMPLATE — `init` renders it to
+  `~/.hermes/config.yaml`; editing it does nothing until re-init.
+- `init` PATCHES installed Hermes source with `sed`: injects the `hermes-god`
+  toolset into `~/.hermes/hermes-agent/toolsets.py` and swaps `hermes-discord`
+  → `hermes-god` in `hermes_cli/platforms.py`. Idempotent (grep-guarded), but a
+  Hermes upgrade can undo it.
+- No tests, linter, or CI in this repo; the proxy (`docker/proxy/main.py`, a
+  single ~180-line FastAPI file) has zero tests. Verify with
+  `docker compose -f docker/docker-compose.yml build` then
+  `curl localhost:4000/health`.
 
 ## Gotchas
 
