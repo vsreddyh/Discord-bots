@@ -70,3 +70,23 @@ services:
       zen-proxy:
         condition: service_healthy
     restart: unless-stopped
+
+  # ── Health Connect sync endpoint (Android app → bot DB) ──
+  health-api:
+    build:
+      context: ../docker/health-api
+    user: "1000:1000"
+    ports:
+      - "8001:8000"
+    volumes:
+      - ../profiles/food/data:/data
+    env_file:
+      - ../.env
+      - ../profiles/food/.env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
