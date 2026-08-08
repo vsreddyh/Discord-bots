@@ -46,8 +46,20 @@ profiles/*/state.db*
 profiles/*/sandboxes/
 profiles/*/skills/.usage.json*
 profiles/*/skills/nousresearch/
+profiles/*/skills/.curator_state
+profiles/*/data/
 profiles/*/.clean_shutdown
 profiles/*/config.rendered.yaml
+
+# ────────────────────────────────────────────────────────
+# Android app (health-gateway)
+# ────────────────────────────────────────────────────────
+android/health-gateway/.gradle/
+android/health-gateway/build/
+android/health-gateway/app/build/
+android/health-gateway/local.properties
+android/health-gateway/.kotlin/
+*.apk
 
 # ────────────────────────────────────────────────────────
 # OS / Editor

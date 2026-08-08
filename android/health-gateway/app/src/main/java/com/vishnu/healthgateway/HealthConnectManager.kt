@@ -1,0 +1,181 @@
+package com.vishnu.healthgateway
+
+import android.content.Context
+import android.util.Log
+import androidx.activity.result.ActivityResultLauncher
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
+import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+
+class HealthConnectManager(context: Context) {
+
+    private val client = HealthConnectClient.getOrCreate(context)
+
+    companion object {
+        private const val TAG = "HealthConnectManager"
+
+        val PERMISSIONS = setOf(
+            HealthPermission.getReadPermission(StepsRecord::class),
+            HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
+            HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
+            HealthPermission.getReadPermission(DistanceRecord::class),
+            HealthPermission.getReadPermission(SleepSessionRecord::class),
+            HealthPermission.getReadPermission(ExerciseSessionRecord::class),
+        )
+
+        private val UTC: DateTimeFormatter = DateTimeFormatter.ISO_INSTANT
+
+        fun availabilityStatus(context: Context): HealthConnectAvailability =
+            when (HealthConnectClient.getSdkStatus(context)) {
+                HealthConnectClient.SDK_UNAVAILABLE -> HealthConnectAvailability.UNAVAILABLE
+                HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED ->
+                    HealthConnectAvailability.UPDATE_REQUIRED
+                else -> HealthConnectAvailability.AVAILABLE
+            }
+    }
+
+    suspend fun grantedPermissions(): Set<String> = withContext(Dispatchers.IO) {
+        client.permissionController.getGrantedPermissions()
+    }
+
+    fun requestPermissions(
+        launcher: ActivityResultLauncher<Set<String>>,
+        permissions: Set<String> = PERMISSIONS,
+    ) {
+        launcher.launch(permissions)
+    }
+
+    fun openHealthConnectSettings(context: Context) {
+        context.startActivity(HealthConnectClient.getHealthConnectManageDataIntent(context))
+    }
+
+    suspend fun collectToday(): HealthSyncPayload {
+        return withContext(Dispatchers.IO) {
+            val now = Instant.now()
+            val startOfDay = LocalDate.now(ZoneOffset.UTC)
+                .atStartOfDay(ZoneOffset.UTC)
+                .toInstant()
+
+            val steps = aggregateSteps(startOfDay, now)
+            val calories = aggregateActiveCalories(startOfDay, now)
+            val sleep = readSleep(startOfDay.minusSeconds(86400), now)
+            val workouts = readWorkouts(startOfDay.minusSeconds(86400), now)
+
+            HealthSyncPayload(
+                syncedAtIso = UTC.format(now),
+                steps = steps,
+                activeCaloriesKcal = calories,
+                sleep = sleep,
+                workouts = workouts,
+            )
+        }
+    }
+
+    private suspend fun aggregateSteps(start: Instant, end: Instant): Long? {
+        val response = client.aggregate(
+            AggregateRequest(
+                metrics = setOf(StepsRecord.COUNT_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(start, end),
+            )
+        )
+        return response[StepsRecord.COUNT_TOTAL]
+    }
+
+    private suspend fun aggregateActiveCalories(start: Instant, end: Instant): Double? {
+        val response = client.aggregate(
+            AggregateRequest(
+                metrics = setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(start, end),
+            )
+        )
+        return response[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
+    }
+
+    private suspend fun readSleep(start: Instant, end: Instant): List<SleepEntry> {
+        val records = client.readRecords(
+            ReadRecordsRequest(
+                recordType = SleepSessionRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(start, end),
+            )
+        )
+        return records.records.map { record ->
+            val stageCounts = record.stages.groupingBy { it.stage }
+                .eachCount()
+                .mapKeys { (stageInt, _) ->
+                    SleepSessionRecord.STAGE_TYPE_INT_TO_STRING_MAP[stageInt] ?: "UNKNOWN"
+                }
+                .mapValues { (_, count) -> count.toLong() }
+            SleepEntry(
+                startIso = record.startTime.toString(),
+                endIso = record.endTime.toString(),
+                totalMinutes = Duration
+                    .between(record.startTime, record.endTime).toMinutes(),
+                stages = stageCounts,
+            )
+        }
+    }
+
+    private suspend fun readWorkouts(start: Instant, end: Instant): List<WorkoutEntry> {
+        val sessions = client.readRecords(
+            ReadRecordsRequest(
+                recordType = ExerciseSessionRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(start, end),
+            )
+        ).records
+
+        val distanceBySession = readDistanceAggregates(start, end)
+        val caloriesBySession = readCaloriesAggregates(start, end)
+
+        return sessions.map { session ->
+            WorkoutEntry(
+                startIso = session.startTime.toString(),
+                endIso = session.endTime.toString(),
+                title = session.title ?: "Workout",
+                type = session.exerciseType.toString(),
+                distanceMeters = distanceBySession[session.metadata.id],
+                caloriesKcal = caloriesBySession[session.metadata.id],
+            )
+        }
+    }
+
+    private suspend fun readDistanceAggregates(start: Instant, end: Instant): Map<String, Double> {
+        val records = client.readRecords(
+            ReadRecordsRequest(
+                recordType = DistanceRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(start, end),
+            )
+        ).records
+        return records.associate { it.metadata.id to it.distance.inMeters }
+    }
+
+    private suspend fun readCaloriesAggregates(start: Instant, end: Instant): Map<String, Double> {
+        val records = client.readRecords(
+            ReadRecordsRequest(
+                recordType = TotalCaloriesBurnedRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(start, end),
+            )
+        ).records
+        return records.associate { it.metadata.id to it.energy.inKilocalories }
+    }
+}
+
+enum class HealthConnectAvailability {
+    AVAILABLE,
+    UPDATE_REQUIRED,
+    UNAVAILABLE,
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Health Gateway</string>
+    <string name="channel_name">Health Sync</string>
+    <string name="channel_desc">Hourly health data sync to your bot</string>
+    <string name="sync_notif_title">Syncing health data…</string>
+    <string name="sync_notif_text">Steps, calories, sleep, workouts</string>
+</resources>
