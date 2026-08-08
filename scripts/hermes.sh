@@ -303,6 +303,9 @@ cmd_start() {
     info "Starting 5 Hermes gateways ..."
     bash "$SCRIPTS_DIR/bots.sh" start
 
+    info "Running data retention ..."
+    bash "$SCRIPTS_DIR/retention.sh" 2>&1 | sed 's/^/  /' || true
+
     start_ui
 
     echo ""
