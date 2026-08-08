@@ -22,6 +22,10 @@ profiles/*/.env
 profiles/*/skills/.usage.json
 
 # Per-profile runtime state (written by the gateways) — never commit
+profiles/*/.cache/
+profiles/*/.local/
+profiles/*/.skills_prompt_snapshot.json
+profiles/*/auth.lock
 profiles/*/audio_cache/
 profiles/*/bin/
 profiles/*/cache/
@@ -40,9 +44,10 @@ profiles/*/sessions/
 profiles/*/state/
 profiles/*/state.db*
 profiles/*/sandboxes/
+profiles/*/skills/.usage.json*
+profiles/*/skills/nousresearch/
 profiles/*/.clean_shutdown
 profiles/*/config.rendered.yaml
-profiles/*/.local/
 
 # ────────────────────────────────────────────────────────
 # OS / Editor

@@ -54,3 +54,8 @@ platform_toolsets:
     - hermes-god
 
 _config_version: 33
+
+onboarding:
+  seen:
+    profile_build_offered: true
+  profile_build: off
