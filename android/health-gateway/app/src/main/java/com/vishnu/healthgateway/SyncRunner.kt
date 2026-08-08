@@ -21,8 +21,16 @@ object SyncRunner {
             if (granted.intersect(HealthConnectManager.PERMISSIONS).isEmpty()) {
                 SyncResult(false, null, "Health Connect permissions not granted")
             } else {
-                val payload = manager.collectToday()
-                SyncClient(context).post(payload)
+                val client = SyncClient(context)
+                val prefs = context.getSharedPreferences(
+                    "health_gateway", Context.MODE_PRIVATE,
+                )
+                val firstSyncDone = prefs.getBoolean("first_sync_done", false)
+                if (!firstSyncDone) {
+                    backfill(client, manager)
+                } else {
+                    client.post(manager.collectToday())
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "sync failed", e)
@@ -30,6 +38,20 @@ object SyncRunner {
         } finally {
             inFlight.set(false)
         }
+    }
+
+    private suspend fun backfill(client: SyncClient, manager: HealthConnectManager): SyncResult {
+        val payloads = manager.collectBackfill()
+        if (payloads.isEmpty()) {
+            return SyncResult(false, null, "no health data to backfill")
+        }
+        var last: SyncResult = SyncResult(true, null, "")
+        for (p in payloads) {
+            last = client.post(p)
+            if (!last.success) return last
+        }
+        client.markFirstSyncDone()
+        return last
     }
 
     fun runAsync(context: Context, onDone: (SyncResult) -> Unit = {}) {

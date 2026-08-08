@@ -52,6 +52,9 @@ fun GatewayScreen(viewModel: MainViewModel) {
         PermissionController.createRequestPermissionResultContract()
     ) {
         viewModel.refresh()
+        if (!viewModel.state.value.permissionsGranted) {
+            viewModel.onSyncError("Still not granted — open the Health Connect app manually")
+        }
     }
 
     Column(
@@ -81,9 +84,35 @@ fun GatewayScreen(viewModel: MainViewModel) {
             }
             !state.permissionsGranted -> {
                 Button(onClick = {
-                    HealthConnectManager(context).requestPermissions(hcRequest)
+                    val mgr = HealthConnectManager(context)
+                    val launched = mgr.requestPermissions(hcRequest)
+                    if (!launched) {
+                        viewModel.onSyncError("Permission screen unavailable — opening Health Connect app")
+                        mgr.openHealthConnectSettings(context)
+                    }
                 }) {
                     Text("Grant Health Connect permissions")
+                }
+                OutlinedButton(onClick = {
+                    viewModel.onSyncError("Open Health Connect → Permissions → Health Gateway → allow each")
+                    HealthConnectManager(context).openHealthConnectSettings(context)
+                }) {
+                    Text("Open Health Connect app")
+                }
+                OutlinedButton(onClick = {
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(HealthConnectManager.playStoreUrl()),
+                    )
+                    runCatching { context.startActivity(intent) }
+                }) {
+                    Text("Install / Update Health Connect (Play Store)")
+                }
+                if (state.healthPackageInfo.isNotEmpty()) {
+                    Text(
+                        "HC package: ${state.healthPackageInfo}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
             else -> {

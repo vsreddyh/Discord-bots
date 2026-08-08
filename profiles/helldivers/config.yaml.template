@@ -1,7 +1,7 @@
 model:
   default: deepseek-v4-flash-free
   provider: custom
-  base_url: http://zen-proxy:4000/v1
+  base_url: ${HERMES_BASE_URL}
   api_key: zen-proxy
 
 agent:
@@ -23,7 +23,7 @@ agent:
 
 terminal:
   backend: local
-  cwd: /workspace
+  cwd: ${HERMES_CWD}
   timeout: 180
 
 approvals:
@@ -42,7 +42,7 @@ discord:
   auto_thread: false
   reactions: true
   channel_skill_bindings:
-    - id: "1535613331610669117"
+    - id: "1535601629884317696"
       skills:
         - i-have-adhd
 

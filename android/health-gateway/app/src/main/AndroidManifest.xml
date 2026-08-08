@@ -10,6 +10,16 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Health Connect data permissions. REQUIRED for API 34+ (Android 14+):
+         without these, the OS silently revokes access and the app never
+         appears in Health Connect's app list. -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
     </queries>
@@ -33,12 +43,20 @@
         </activity>
 
         <!-- Health Connect permission rationale → takes user to Health Connect's
-             own permission screen for the requested record types. -->
+             own permission screen for the requested record types.
+             BOTH intent-filters are required (Android ≤13 uses
+             ACTION_SHOW_PERMISSIONS_RATIONALE, Android 14+ uses
+             VIEW_PERMISSION_USAGE). Missing either = silent permission
+             revocation, app never listed in Health Connect. -->
         <activity-alias
             android:name="ViewPermissionUsageActivity"
             android:exported="true"
             android:targetActivity=".MainActivity"
             android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />

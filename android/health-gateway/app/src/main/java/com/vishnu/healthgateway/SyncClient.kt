@@ -28,6 +28,9 @@ class SyncClient(context: Context) {
 
     fun serverUrl(): String = prefs.getString("server_url", "") ?: ""
     fun authToken(): String = prefs.getString("auth_token", "") ?: ""
+    fun markFirstSyncDone() {
+        prefs.edit().putBoolean("first_sync_done", true).apply()
+    }
 
     fun setConfig(serverUrl: String, authToken: String) {
         prefs.edit()

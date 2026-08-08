@@ -24,10 +24,14 @@ import java.time.format.DateTimeFormatter
 
 class HealthConnectManager(context: Context) {
 
-    private val client = HealthConnectClient.getOrCreate(context)
+    private val client: HealthConnectClient? = runCatching {
+        HealthConnectClient.getOrCreate(context)
+    }.getOrNull()
 
     companion object {
         private const val TAG = "HealthConnectManager"
+
+        const val HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata"
 
         val PERMISSIONS = setOf(
             HealthPermission.getReadPermission(StepsRecord::class),
@@ -47,34 +51,61 @@ class HealthConnectManager(context: Context) {
                     HealthConnectAvailability.UPDATE_REQUIRED
                 else -> HealthConnectAvailability.AVAILABLE
             }
+
+        fun healthConnectPackageInfo(context: Context): String {
+            return try {
+                val pm = context.packageManager
+                val info = pm.getPackageInfo(HEALTH_CONNECT_PACKAGE, 0)
+                "installed v${info.versionName}, enabled=${info.applicationInfo?.enabled}"
+            } catch (e: Exception) {
+                "NOT installed"
+            }
+        }
+
+        fun playStoreUrl(): String =
+            "https://play.google.com/store/apps/details?id=$HEALTH_CONNECT_PACKAGE"
     }
 
-    suspend fun grantedPermissions(): Set<String> = withContext(Dispatchers.IO) {
-        client.permissionController.getGrantedPermissions()
+    suspend fun grantedPermissions(): Set<String> {
+        val c = client ?: return emptySet()
+        return withContext(Dispatchers.IO) {
+            c.permissionController.getGrantedPermissions()
+        }
     }
 
     fun requestPermissions(
         launcher: ActivityResultLauncher<Set<String>>,
         permissions: Set<String> = PERMISSIONS,
-    ) {
-        launcher.launch(permissions)
+    ): Boolean {
+        return runCatching { launcher.launch(permissions) }
+            .onFailure { Log.e(TAG, "permission launch failed", it) }
+            .isSuccess
     }
 
     fun openHealthConnectSettings(context: Context) {
-        context.startActivity(HealthConnectClient.getHealthConnectManageDataIntent(context))
+        runCatching {
+            context.startActivity(HealthConnectClient.getHealthConnectManageDataIntent(context))
+        }.onFailure { Log.e(TAG, "open HC settings failed", it) }
     }
 
     suspend fun collectToday(): HealthSyncPayload {
+        val c = client ?: return HealthSyncPayload(
+            syncedAtIso = UTC.format(Instant.now()),
+            steps = null,
+            activeCaloriesKcal = null,
+            sleep = emptyList(),
+            workouts = emptyList(),
+        )
         return withContext(Dispatchers.IO) {
             val now = Instant.now()
             val startOfDay = LocalDate.now(ZoneOffset.UTC)
                 .atStartOfDay(ZoneOffset.UTC)
                 .toInstant()
 
-            val steps = aggregateSteps(startOfDay, now)
-            val calories = aggregateActiveCalories(startOfDay, now)
-            val sleep = readSleep(startOfDay.minusSeconds(86400), now)
-            val workouts = readWorkouts(startOfDay.minusSeconds(86400), now)
+            val steps = aggregateSteps(c, startOfDay, now)
+            val calories = aggregateActiveCalories(c, startOfDay, now)
+            val sleep = readSleep(c, startOfDay.minusSeconds(86400), now)
+            val workouts = readWorkouts(c, startOfDay.minusSeconds(86400), now)
 
             HealthSyncPayload(
                 syncedAtIso = UTC.format(now),
@@ -86,7 +117,40 @@ class HealthConnectManager(context: Context) {
         }
     }
 
-    private suspend fun aggregateSteps(start: Instant, end: Instant): Long? {
+    suspend fun collectBackfill(days: Int = 30): List<HealthSyncPayload> {
+        val c = client ?: return emptyList()
+        return withContext(Dispatchers.IO) {
+            val now = Instant.now()
+            val start = now.minusSeconds(days * 86400L)
+            val sleep = readSleep(c, start, now)
+            val workouts = readWorkouts(c, start, now)
+
+            val payloads = mutableListOf<HealthSyncPayload>()
+            for (i in 0 until days) {
+                val dayStart = start.plusSeconds(i * 86400L)
+                val dayEnd = minOf(dayStart.plusSeconds(86400L), now)
+                if (dayEnd <= dayStart) break
+                val steps = aggregateSteps(c, dayStart, dayEnd)
+                val calories = aggregateActiveCalories(c, dayStart, dayEnd)
+                if (steps == null && calories == null) continue
+                payloads.add(
+                    HealthSyncPayload(
+                        syncedAtIso = UTC.format(dayStart),
+                        steps = steps,
+                        activeCaloriesKcal = calories,
+                        sleep = emptyList(),
+                        workouts = emptyList(),
+                    )
+                )
+            }
+            payloads.lastOrNull()?.let {
+                payloads[payloads.size - 1] = it.copy(sleep = sleep, workouts = workouts)
+            }
+            payloads
+        }
+    }
+
+    private suspend fun aggregateSteps(client: HealthConnectClient, start: Instant, end: Instant): Long? {
         val response = client.aggregate(
             AggregateRequest(
                 metrics = setOf(StepsRecord.COUNT_TOTAL),
@@ -96,7 +160,7 @@ class HealthConnectManager(context: Context) {
         return response[StepsRecord.COUNT_TOTAL]
     }
 
-    private suspend fun aggregateActiveCalories(start: Instant, end: Instant): Double? {
+    private suspend fun aggregateActiveCalories(client: HealthConnectClient, start: Instant, end: Instant): Double? {
         val response = client.aggregate(
             AggregateRequest(
                 metrics = setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL),
@@ -106,7 +170,7 @@ class HealthConnectManager(context: Context) {
         return response[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
     }
 
-    private suspend fun readSleep(start: Instant, end: Instant): List<SleepEntry> {
+    private suspend fun readSleep(client: HealthConnectClient, start: Instant, end: Instant): List<SleepEntry> {
         val records = client.readRecords(
             ReadRecordsRequest(
                 recordType = SleepSessionRecord::class,
@@ -130,7 +194,7 @@ class HealthConnectManager(context: Context) {
         }
     }
 
-    private suspend fun readWorkouts(start: Instant, end: Instant): List<WorkoutEntry> {
+    private suspend fun readWorkouts(client: HealthConnectClient, start: Instant, end: Instant): List<WorkoutEntry> {
         val sessions = client.readRecords(
             ReadRecordsRequest(
                 recordType = ExerciseSessionRecord::class,
@@ -138,8 +202,8 @@ class HealthConnectManager(context: Context) {
             )
         ).records
 
-        val distanceBySession = readDistanceAggregates(start, end)
-        val caloriesBySession = readCaloriesAggregates(start, end)
+        val distanceBySession = readDistanceAggregates(client, start, end)
+        val caloriesBySession = readCaloriesAggregates(client, start, end)
 
         return sessions.map { session ->
             WorkoutEntry(
@@ -153,7 +217,7 @@ class HealthConnectManager(context: Context) {
         }
     }
 
-    private suspend fun readDistanceAggregates(start: Instant, end: Instant): Map<String, Double> {
+    private suspend fun readDistanceAggregates(client: HealthConnectClient, start: Instant, end: Instant): Map<String, Double> {
         val records = client.readRecords(
             ReadRecordsRequest(
                 recordType = DistanceRecord::class,
@@ -163,7 +227,7 @@ class HealthConnectManager(context: Context) {
         return records.associate { it.metadata.id to it.distance.inMeters }
     }
 
-    private suspend fun readCaloriesAggregates(start: Instant, end: Instant): Map<String, Double> {
+    private suspend fun readCaloriesAggregates(client: HealthConnectClient, start: Instant, end: Instant): Map<String, Double> {
         val records = client.readRecords(
             ReadRecordsRequest(
                 recordType = TotalCaloriesBurnedRecord::class,

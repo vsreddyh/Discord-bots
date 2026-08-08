@@ -12,6 +12,7 @@ data class UiState(
     val authToken: String = "",
     val healthAvailable: Boolean = false,
     val healthUpdateRequired: Boolean = false,
+    val healthPackageInfo: String = "",
     val permissionsGranted: Boolean = false,
     val syncing: Boolean = false,
     val lastResult: String = "",
@@ -40,11 +41,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             healthAvailable = availability == HealthConnectAvailability.AVAILABLE,
             healthUpdateRequired = availability == HealthConnectAvailability.UPDATE_REQUIRED,
+            healthPackageInfo = HealthConnectManager.healthConnectPackageInfo(getApplication()),
         )
         viewModelScope.launch {
-            val manager = HealthConnectManager(getApplication())
             val granted = try {
-                manager.grantedPermissions()
+                HealthConnectManager(getApplication()).grantedPermissions()
             } catch (e: Exception) {
                 emptySet()
             }
@@ -60,6 +61,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onAuthToken(v: String) {
         _state.value = _state.value.copy(authToken = v)
+    }
+
+    fun onSyncError(message: String) {
+        _state.value = _state.value.copy(lastResult = "FAILED — $message")
     }
 
     fun saveConfig() {
