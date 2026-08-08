@@ -92,3 +92,10 @@ the account must be available to the profile). No cron — updates happen only
 when the user asks. SQLite not required; the clone's git history + markdown
 files are the store. The old `.hermes/project.md` in the repo was removed — it
 referenced a dead path and the standalone profile replaces it.
+
+### Discord identity
+
+- Bot name: **Portas-Maintainer**
+- Home channel: `1523762320986214541` (via `DISCORD_HOME_CHANNEL` /
+  `channel_skill_bindings`)
+- Token: per-profile `.env`, git-ignored — never commit it.

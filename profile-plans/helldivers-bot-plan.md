@@ -90,6 +90,9 @@ usage.
 
 ## SQLite Schema
 
+Local SQLite DB — a single file in the profile data dir. No remote/postgres
+DB; all bots share this rule.
+
 All data from the wiki scrape (revid-diffed):
 
 - `planets` (index, name, sector, biome, conditions JSON) — static
@@ -157,3 +160,10 @@ Answers cite the wiki page they came from and flag stale data.
 Isolated workspace, Discord-connected (same setup as food/workout bot). SQLite
 DB in profile data dir. Wiki sync script runs on the mandatory hourly cron and
 before answering when cache is stale.
+
+### Discord identity
+
+- Bot name: **Rouge Bot**
+- Home channel: `1535601629884317696` (via `DISCORD_HOME_CHANNEL` /
+  `channel_skill_bindings`)
+- Token: per-profile `.env`, git-ignored — never commit it.

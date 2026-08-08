@@ -10,6 +10,9 @@ Hermes Agent profile: money tracking via Discord.
 
 ## SQLite Schema
 
+Local SQLite DB — a single file in the profile data dir. No remote/postgres
+DB; all bots share this rule.
+
 - `transactions` (date, amount, type, category, note)
   - `type`: `income` | `expense`
   - `category`: normalized (groceries, eating out, transport, bills, rent,
@@ -46,3 +49,10 @@ and type, replies naturally.
 
 Isolated workspace, Discord-connected (same setup as food/workout bot). SQLite
 DB in profile data dir.
+
+### Discord identity
+
+- Bot name: **Miser**
+- Home channel: `1535611174039719976` (via `DISCORD_HOME_CHANNEL` /
+  `channel_skill_bindings`)
+- Token: per-profile `.env`, git-ignored — never commit it.

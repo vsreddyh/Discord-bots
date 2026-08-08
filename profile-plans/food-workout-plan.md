@@ -22,6 +22,9 @@ chat-triggered summaries.
 
 ## SQLite Schema
 
+Local SQLite DB — a single file in the profile data dir. No remote/postgres
+DB; all bots share this rule.
+
 - `profile` (weight_kg, weight_goal_kg, height_cm, age, activity_level)
 - `foods` (name, kcal, protein_g, carbs_g, fat_g, fiber_g per 100g, source)
 - `meal_items` (meal_id, food_id, grams)
@@ -69,3 +72,10 @@ morning sleep confirmation in chat → `sleep_log`.
 
 Isolated workspace. REST endpoint for the gateway app — LAN reachable (or local
 reverse proxy), token per install. SQLite DB in profile data dir.
+
+### Discord identity
+
+- Bot name: **Saitama**
+- Home channel: `1535613331610669117` (via `DISCORD_HOME_CHANNEL` /
+  `channel_skill_bindings`)
+- Token: per-profile `.env`, git-ignored — never commit it.

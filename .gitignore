@@ -16,6 +16,35 @@ docker/.env
 workspace/
 
 # ────────────────────────────────────────────────────────
+# Bot profiles — secrets live in per-profile .env, never commit
+# ────────────────────────────────────────────────────────
+profiles/*/.env
+profiles/*/skills/.usage.json
+
+# Per-profile runtime state (written by the gateways) — never commit
+profiles/*/audio_cache/
+profiles/*/bin/
+profiles/*/cache/
+profiles/*/channel_directory.json
+profiles/*/cron/
+profiles/*/gateway*
+profiles/*/hooks/
+profiles/*/image_cache/
+profiles/*/kanban/
+profiles/*/kanban.db*
+profiles/*/logs/
+profiles/*/memories/
+profiles/*/pairing/
+profiles/*/platforms/
+profiles/*/sessions/
+profiles/*/state/
+profiles/*/state.db*
+profiles/*/sandboxes/
+profiles/*/.clean_shutdown
+profiles/*/config.rendered.yaml
+profiles/*/.local/
+
+# ────────────────────────────────────────────────────────
 # OS / Editor
 # ────────────────────────────────────────────────────────
 .DS_Store

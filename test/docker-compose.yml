@@ -1,0 +1,72 @@
+services:
+
+  zen-proxy:
+    build:
+      context: ../docker/proxy
+    ports:
+      - "4000:4000"
+    env_file: ../.env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── Bot gateways ──────────────────────────────────────
+  story:
+    build: .
+    user: "1000:1000"
+    volumes:
+      - ../profiles/story:/hermes-home
+      - ../workspace/story:/workspace
+    environment:
+      HERMES_HOME: /hermes-home
+      HOME: /hermes-home
+    depends_on:
+      zen-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+  helldivers:
+    build: .
+    user: "1000:1000"
+    volumes:
+      - ../profiles/helldivers:/hermes-home
+      - ../workspace/helldivers:/workspace
+    environment:
+      HERMES_HOME: /hermes-home
+      HOME: /hermes-home
+    depends_on:
+      zen-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+  money:
+    build: .
+    user: "1000:1000"
+    volumes:
+      - ../profiles/money:/hermes-home
+      - ../workspace/money:/workspace
+    environment:
+      HERMES_HOME: /hermes-home
+      HOME: /hermes-home
+    depends_on:
+      zen-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+  food:
+    build: .
+    user: "1000:1000"
+    volumes:
+      - ../profiles/food:/hermes-home
+      - ../workspace/food:/workspace
+    environment:
+      HERMES_HOME: /hermes-home
+      HOME: /hermes-home
+    depends_on:
+      zen-proxy:
+        condition: service_healthy
+    restart: unless-stopped
