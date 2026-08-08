@@ -8,7 +8,7 @@ import os
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("zen-proxy")
@@ -106,8 +106,8 @@ async def _forward(
 
 def _build_response(resp: httpx.Response, stream: bool) -> Response:
     if stream:
-        return Response(
-            content=resp.iter_bytes(),
+        return StreamingResponse(
+            resp.iter_bytes(),
             status_code=resp.status_code,
             headers={
                 "content-type": "text/event-stream",
