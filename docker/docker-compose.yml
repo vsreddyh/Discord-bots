@@ -1,28 +1,9 @@
 services:
 
   # ──────────────────────────────────────────────────────
-  # Zen Proxy — Credit-aware OpenCode Zen → DeepInfra proxy
-  # ──────────────────────────────────────────────────────
-  zen-proxy:
-    build:
-      context: ./proxy
-      dockerfile: Dockerfile
-    ports:
-      - "4000:4000"
-    env_file: ../.env
-    environment:
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY}
-      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    restart: unless-stopped
-
-  # ──────────────────────────────────────────────────────
   # SearXNG — Private metasearch engine
+  # The ONLY dockerized service in the live stack. zen-proxy and health-api
+  # run natively on the host (see scripts/hermes.sh); bots run natively too.
   # ──────────────────────────────────────────────────────
   searxng:
     image: searxng/searxng:latest

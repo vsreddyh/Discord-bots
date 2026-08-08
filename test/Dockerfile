@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git openssh-client curl sqlite3 && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir hermes-agent 'discord.py[voice]==2.7.1'
+RUN pip install --no-cache-dir hermes-agent 'discord.py[voice]==2.7.1' pymongo
 
 RUN python - <<'PY'
 import pathlib, re

@@ -14,13 +14,45 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # ── In-stack MongoDB for the test environment ──────────
+  # Mirrors the remote cluster the native stack uses. Bots/health-api in the
+  # test stack point here via MONGODB_URI=mongodb://mongodb:27017 (set by
+  # entrypoint.sh / compose environment), never at the remote cluster.
+  mongodb:
+    image: mongo:7
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   # ── Bot gateways ──────────────────────────────────────
+  master:
+    build: .
+    user: "1000:1000"
+    volumes:
+      - ../profiles/master:/hermes-home
+      - ../workspace/master:/workspace
+      - ../tools:/tools
+    environment:
+      HERMES_HOME: /hermes-home
+      HOME: /hermes-home
+    depends_on:
+      zen-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
   story:
     build: .
     user: "1000:1000"
     volumes:
       - ../profiles/story:/hermes-home
       - ../workspace/story:/workspace
+      - ../tools:/tools
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -35,6 +67,7 @@ services:
     volumes:
       - ../profiles/helldivers:/hermes-home
       - ../workspace/helldivers:/workspace
+      - ../tools:/tools
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -49,6 +82,7 @@ services:
     volumes:
       - ../profiles/money:/hermes-home
       - ../workspace/money:/workspace
+      - ../tools:/tools
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -63,6 +97,7 @@ services:
     volumes:
       - ../profiles/food:/hermes-home
       - ../workspace/food:/workspace
+      - ../tools:/tools
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -71,18 +106,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Health Connect sync endpoint (Android app → bot DB) ──
+  # ── Health Connect sync endpoint (Android app → MongoDB) ──
   health-api:
     build:
       context: ../docker/health-api
     user: "1000:1000"
     ports:
       - "8001:8000"
-    volumes:
-      - ../profiles/food/data:/data
     env_file:
       - ../.env
       - ../profiles/food/.env
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DB: hermes
+    depends_on:
+      mongodb:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -90,3 +129,6 @@ services:
       retries: 10
       start_period: 10s
     restart: unless-stopped
+
+volumes:
+  mongo_data:
