@@ -1,25 +1,13 @@
-# Zen Proxy + SearXNG Docker Setup
+# SearXNG Docker Setup
 
-Run the [Zen Proxy](proxy/) (credit-aware OpenCode Zen → DeepInfra proxy) and [SearXNG](https://docs.searxng.org/) (private metasearch engine) in Docker.
+Runs [SearXNG](https://docs.searxng.org/) (private metasearch engine) — the
+**only** dockerized service in the live stack. The Zen proxy (`proxy/`) and
+health-api (`health-api/`) are run natively by `scripts/hermes.sh`, not here.
 
 ## Quick Start
 
 ```bash
-# 1. Setup — copies .env.example → .env, starts services
-make setup
-
-# 2. Edit .env with your API keys
-#    At minimum, set OPENCODE_API_KEY
-vim .env
-
-# 3. Restart to apply
-make restart
-```
-
-## Usage
-
-```bash
-# Start all services
+# Start SearXNG
 make up
 
 # View logs
@@ -28,7 +16,7 @@ make logs
 # Check status
 make status
 
-# Stop all
+# Stop
 make down
 ```
 
@@ -36,16 +24,22 @@ make down
 
 ```
 docker/
-├── docker-compose.yml      # Service definitions
+├── docker-compose.yml      # searxng only (live stack)
 ├── Makefile                # Convenience commands
-docker/proxy/
-├── main.py                 # Credit-aware API proxy
-├── Dockerfile              # Proxy container
-└── requirements.txt        # Python deps
+├── proxy/
+│   ├── main.py             # Credit-aware API proxy (run natively on :4000)
+│   └── ...
+└── health-api/
+    └── main.py             # Health Connect sync endpoint (run natively on :8001)
 ```
 
-## About the Zen Proxy
+## Notes
 
-The proxy sits on port `4000` and forwards all requests to OpenCode Zen. If OpenCode Zen returns a credit/payment error (HTTP 402 or billing-related message), the proxy automatically retries the request on DeepInfra. All other errors pass through as-is.
-
-Set `OPENCODE_API_KEY` and optionally `DEEPINFRA_API_KEY` in `.env`.
+- `SEARXNG_PORT` (default `8888`), `SEARXNG_HOSTNAME`, and `SEARXNG_SECRET_KEY`
+  come from the **root** `.env` (`env_file: ../.env`).
+- `make setup` copies a `docker/.env.example` that doesn't exist — the
+  authoritative env file is the repo-root `.env`. `make` is just a thin wrapper
+  around `docker compose` for the searxng service.
+- The proxy and health-api source directories live here because the **test
+  stack** (`test/docker-compose.yml`) builds them into containers; the live
+  stack runs the same code natively.
