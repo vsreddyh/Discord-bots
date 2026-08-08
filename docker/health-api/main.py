@@ -1,17 +1,21 @@
 """Health Connect sync endpoint for the food bot.
 
 Accepts POSTs from the Health Gateway Android app and persists to the
-shared SQLite DB (profiles/food/data/health.db) that the bot also reads.
+shared remote MongoDB collections that the food bot also reads
+(food_daily_stats / food_sleep_log / food_workouts).
 
 Auth: per-install tokens via `Authorization: Bearer <token>`.
 HEALTH_API_TOKENS is a comma-separated list (one token per install).
+
+Env:
+  MONGODB_URI  connection string (required)
+  MONGODB_DB   database name (default: hermes)
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -20,40 +24,28 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+try:
+    from pymongo import MongoClient
+except ImportError:
+    MongoClient = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("health-api")
 
 app = FastAPI(title="Health Sync API")
 
-DB_PATH = os.environ.get("HEALTH_DB_PATH", "/data/health.db")
 _raw_tokens = os.environ.get("HEALTH_API_TOKENS", "") or os.environ.get("HEALTH_SYNC_TOKEN", "")
 TOKENS = {t.strip() for t in _raw_tokens.split(",") if t.strip()}
 
 
-# ── Schema mirrors profiles/*/data SQLite schema from the bot plan ──
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS daily_stats (
-    date            TEXT PRIMARY KEY,
-    steps           INTEGER,
-    active_calories REAL,
-    synced_at       TEXT
-);
-CREATE TABLE IF NOT EXISTS sleep_log (
-    date        TEXT,
-    sleep_start TEXT,
-    wake_time   TEXT,
-    hours       REAL,
-    quality     TEXT,
-    synced_at   TEXT
-);
-CREATE TABLE IF NOT EXISTS workouts (
-    date     TEXT,
-    type     TEXT,
-    duration INTEGER,
-    notes    TEXT,
-    synced_at TEXT
-);
-"""
+def _get_db():
+    if MongoClient is None:
+        raise RuntimeError("pymongo not installed")
+    uri = os.environ.get("MONGODB_URI", "").strip()
+    if not uri:
+        raise RuntimeError("MONGODB_URI not set")
+    db_name = os.environ.get("MONGODB_DB", "hermes").strip() or "hermes"
+    return MongoClient(uri, serverSelectionTimeoutMS=8000)[db_name]
 
 
 # ── Models matching the Android app's HealthSyncPayload ──
@@ -80,13 +72,6 @@ class HealthSyncPayload(BaseModel):
     activeCaloriesKcal: Optional[float] = None
     sleep: list[SleepEntry] = Field(default_factory=list)
     workouts: list[WorkoutEntry] = Field(default_factory=list)
-
-
-def _connect() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.executescript(SCHEMA)
-    return conn
 
 
 def _local_date(iso: str) -> str:
@@ -120,77 +105,58 @@ async def sync(payload: HealthSyncPayload, authorization: Optional[str] = Header
     synced_at = datetime.now(timezone.utc).isoformat()
     stats_date = _local_date(payload.syncedAtIso)
 
-    conn = _connect()
-    try:
-        # daily_stats: upsert the day's totals
-        if payload.steps is not None or payload.activeCaloriesKcal is not None:
-            existing = conn.execute(
-                "SELECT steps, active_calories FROM daily_stats WHERE date = ?",
-                (stats_date,),
-            ).fetchone()
-            steps = existing[0] if existing else None
-            cal = existing[1] if existing else None
-            if payload.steps is not None:
-                steps = payload.steps
-            if payload.activeCaloriesKcal is not None:
-                cal = payload.activeCaloriesKcal
-            conn.execute(
-                """
-                INSERT INTO daily_stats (date, steps, active_calories, synced_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(date) DO UPDATE SET
-                    steps = excluded.steps,
-                    active_calories = excluded.active_calories,
-                    synced_at = excluded.synced_at
-                """,
-                (stats_date, steps, cal, synced_at),
-            )
+    db = _get_db()
+    daily = db["food_daily_stats"]
+    sleep_c = db["food_sleep_log"]
+    workout_c = db["food_workouts"]
 
-        # sleep_log: append new sessions (dedupe on the exact start timestamp)
-        for s in payload.sleep:
-            wake_date = _local_date(s.endIso)
-            dup = conn.execute(
-                "SELECT 1 FROM sleep_log WHERE sleep_start = ?", (s.startIso,)
-            ).fetchone()
-            if dup:
-                continue
-            conn.execute(
-                """
-                INSERT INTO sleep_log
-                    (date, sleep_start, wake_time, hours, synced_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    wake_date,
-                    s.startIso,
-                    s.endIso,
-                    round(s.totalMinutes / 60.0, 2),
-                    synced_at,
-                ),
-            )
+    # daily_stats: merge the day's totals (steps/calories) into one doc per date.
+    if payload.steps is not None or payload.activeCaloriesKcal is not None:
+        existing = daily.find_one({"date": stats_date})
+        steps = existing.get("steps") if existing else None
+        cal = existing.get("active_calories") if existing else None
+        if payload.steps is not None:
+            steps = payload.steps
+        if payload.activeCaloriesKcal is not None:
+            cal = payload.activeCaloriesKcal
+        daily.update_one(
+            {"date": stats_date},
+            {"$set": {"steps": steps, "active_calories": cal, "synced_at": synced_at}},
+            upsert=True,
+        )
 
-        # workouts: append new sessions (dedupe on start + type)
-        for w in payload.workouts:
-            duration = _minutes_between(w.startIso, w.endIso)
-            notes = _workout_notes(w)
-            dup = conn.execute(
-                "SELECT 1 FROM workouts WHERE date = ? AND type = ? AND duration = ?",
-                (_local_date(w.startIso), w.type, duration),
-            ).fetchone()
-            if dup:
-                continue
-            conn.execute(
-                """
-                INSERT INTO workouts
-                    (date, type, duration, notes, synced_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (_local_date(w.startIso), w.type, duration, notes, synced_at),
-            )
+    # sleep_log: append new sessions (dedupe on the exact start timestamp).
+    for s in payload.sleep:
+        wake_date = _local_date(s.endIso)
+        dup = sleep_c.find_one({"sleep_start": s.startIso})
+        if dup:
+            continue
+        sleep_c.insert_one({
+            "date": wake_date,
+            "sleep_start": s.startIso,
+            "wake_time": s.endIso,
+            "hours": round(s.totalMinutes / 60.0, 2),
+            "synced_at": synced_at,
+        })
 
-        conn.commit()
-    finally:
-        conn.close()
+    # workouts: append new sessions (dedupe on start + type).
+    for w in payload.workouts:
+        duration = _minutes_between(w.startIso, w.endIso)
+        notes = _workout_notes(w)
+        dup = workout_c.find_one({
+            "date": _local_date(w.startIso),
+            "type": w.type,
+            "duration": duration,
+        })
+        if dup:
+            continue
+        workout_c.insert_one({
+            "date": _local_date(w.startIso),
+            "type": w.type,
+            "duration": duration,
+            "notes": notes,
+            "synced_at": synced_at,
+        })
 
     logger.info(
         "synced device=%s steps=%s calories=%s sleep=%d workouts=%d",
