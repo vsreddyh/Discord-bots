@@ -1,67 +1,71 @@
 # Food & Workout Bot
 
-A Hermes Agent profile for food and workout tracking.
+Hermes Agent profile: food, weight, sleep, and workout tracking.
 
-## Behavior
+## Skill
 
-- Log meals: name + quantity + calories; web search for unknown values
-- Daily calorie goal from TDEE (pure Python)
+Uses Hermes' built-in `official/health/fitness-nutrition` skill (install into
+this profile via `hermes skills install official/health/fitness-nutrition`):
 
-## Data Storage — SQLite
+- USDA FoodData Central food lookup — macros + calories, 380k foods
+  (`USDA_API_KEY` env var; `DEMO_KEY` works without signup)
+- TDEE, BMI, macro splits, 1RM, body fat — `scripts/body_calc.py`, pure Python
+- wger exercise lookup for workouts
 
-- meals (date, type, name, quantity, calories)
-- workouts (date, type, duration, notes) — from Health Connect
-- daily_stats (date, steps, active_calories) — one row per day
-- sleep_log (date, sleep_start, wake_time, hours, quality) — manual morning entry
+Custom build adds what the skill lacks: persistent logging, watch data,
+chat-triggered summaries.
 
-Agent queries the DB via a Python helper script:
-- add meal
-- log sleep (daily morning entry)
-- sync watch data from Health Connect gateway
-- daily/weekly summary
+## Scope
+
+- Track weight, calories, macros (kcal, protein, carbs, fat, fiber)
+- Out of scope: micros, barcode, photo logging, water, reminders, weekly reports
+
+## SQLite Schema
+
+- `profile` (weight_kg, weight_goal_kg, height_cm, age, activity_level)
+- `foods` (name, kcal, protein_g, carbs_g, fat_g, fiber_g per 100g, source)
+- `meal_items` (meal_id, food_id, grams)
+- `meals` (date, type)
+- `workouts` (date, type, duration, notes) — from Health Connect
+- `daily_stats` (date, steps, active_calories)
+- `sleep_log` (date, sleep_start, wake_time, hours, quality) — gateway
+  auto-fills hours, user confirms/annotates quality in the morning
+- `targets` (protein_g, carbs_g, fat_g, fiber_g, kcal) — editable in chat
+
+Python helper script: add meal, log weight/sleep, sync watch data,
+fix/remove meals, daily/weekly summary.
+
+## Food Lookup
+
+- USDA via the skill (search by name, scale per-100g to portion)
+- Unknown/not found → LLM knowledge + user confirm, saved as `user` food
+- Results cached in `foods`; repeats hit cache only
+
+## Targets
+
+- kcal: TDEE from the skill's `body_calc.py`; adaptive — each `weight` entry
+  recalibrates toward the trend
+- weight goal: 65 kg; calorie goal adjusts deficit/surplus toward it
+- protein 1.6–2.2 g/kg, fat 25–35% kcal, carbs remainder, fiber 14 g/1000 kcal
 
 ## Watch Data (Redmi Watch 5 Lite)
 
-Gateway: **Health Connect + custom Android app** — the only path with daily
-steps, active calories, and sleep.
+Health Connect + custom Android gateway app:
 
-watch → Mi Fitness phone app (BLE) → Health Connect → custom Android gateway
-app → bot's REST API → SQLite.
+watch → Mi Fitness (BLE) → Health Connect → gateway app → bot REST API → SQLite.
 
-### The gateway app (Android, Kotlin)
+- Reads Health Connect via Jetpack SDK 1.1.0 (`readRecords()` for
+  sleep/workouts, `aggregate()` for steps); foreground service, hourly sync;
+  sideloadable
+- Provides daily steps, active calories, sleep, workouts (distance, calories)
+- NOT available: stress, VO2 max, sleep breathing quality
+- Prereqs: watch bound in Mi Fitness, Health Connect data types enabled,
+  permissions granted, Mi Fitness opened regularly (watch has no WiFi)
 
-- Reads Health Connect via Jetpack SDK (1.1.0 stable): `readRecords()` for
-  sleep/workouts, `aggregate()` for steps (avoids double counting)
-- Runs as a foreground service, syncs hourly
-- Sideloadable — no Play Store approval needed
-- Effort: ~1–2 days if you know Android, a week+ if not
-
-### What you get
-
-- Daily: steps, active calories, sleep
-- Workouts: sessions with distance, calories
-- NOT available (no Health Connect type): stress, VO2 max, sleep breathing
-  quality
-- Verify Mi Fitness exports sleep stages to Health Connect
-
-### Phone-app prereqs
-
-1. Watch bound in Mi Fitness; Health Connect installed (Android 14+ built-in)
-2. Mi Fitness → Settings → Health Connect → enable data types
-3. Health Connect → App permissions → Mi Fitness → grant all
-4. Open Mi Fitness regularly so data pushes (watch has no WiFi)
-
-### Flow
-
-- Gateway app syncs Health Connect → bot API → SQLite (daily_stats, workouts)
-- After every sync, bot posts a Discord update (steps so far, active calories,
-  sleep)
-- Morning: user confirms sleep in chat → sleep_log
-- Bot answers trends: "you averaged 8k steps and 2h sleep this week"
+Flow: gateway syncs → bot posts Discord update (steps, active calories, sleep);
+morning sleep confirmation in chat → `sleep_log`.
 
 ## Profile
 
-Isolated with its own terminal workspace. Receives watch data from the Health
-Connect gateway app via a small REST endpoint — must be internet-reachable
-from the phone (reverse proxy or VPN) and authenticated (token per install).
-SQLite DB in profile data dir.
+Isolated workspace. REST endpoint for the gateway app — LAN reachable (or local
+reverse proxy), token per install. SQLite DB in profile data dir.
