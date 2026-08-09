@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Health Connect requires runtime permission; declared at manifest level for 13+ check. -->
     <uses-permission android:name="android.permission.HEALTH_PERMISSION" />
@@ -67,6 +68,15 @@
             android:name=".SyncService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- WorkManager runs setForeground() via its internal
+             SystemForegroundService. Android 14+ (targetSdk 34+) requires an
+             explicit FGS type or the app crashes on launch with
+             InvalidForegroundServiceTypeException. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <receiver
             android:name=".BootReceiver"

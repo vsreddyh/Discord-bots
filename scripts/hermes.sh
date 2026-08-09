@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Fully-Dockerized live stack orchestrator.
+#
+# Everything (searxng, zen-proxy, health-api, 5 bots, dashboard, retention)
+# runs as compose services in docker/docker-compose.yml. init only builds the
+# images, seeds per-profile .env files, copies skills, and installs the
+# retention cron. No host Hermes install, venvs, or native processes.
+
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
-BOTS_DIR="$RUN_DIR/bots"
-HERMES_HOME_DEFAULT="${HERMES_HOME:-$HOME/.hermes}"
-DOCKER_COMPOSE_LIVE="$REPO/docker/docker-compose.yml"
+COMPOSE="$REPO/docker/docker-compose.yml"
 BOTS=(master story helldivers money food)
-
-PORT="${HERMES_DASHBOARD_PORT:-9119}"
-UI_LOG="$RUN_DIR/dashboard.log"
-UI_PID="$RUN_DIR/dashboard.pid"
-PROXY_LOG="$RUN_DIR/zen-proxy.log"
-PROXY_PID="$RUN_DIR/zen-proxy.pid"
-HEALTH_LOG="$RUN_DIR/health-api.log"
-HEALTH_PID="$RUN_DIR/health-api.pid"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
@@ -29,12 +26,12 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Install Hermes, patch hermes-god, set up venvs + per-bot .env + cron
-  start      Start searxng (docker) → zen-proxy → health-api → 5 bots → dashboard
-  stop       Stop dashboard → bots → health-api → zen-proxy → searxng
+  init       Build images, seed per-bot .env + skills, set up Tailscale, install retention cron
+  start      Start the whole Docker stack (searxng, proxy, bots, dashboard)
+  stop       Stop the Docker stack
   restart    Stop then start
   status     Show all service states
-  clean      Wipe everything (state, run dirs, hermes install). Destructive.
+  clean      Wipe everything (profiles state, docker volumes, cron). Destructive.
 EOF
 }
 
@@ -44,13 +41,8 @@ load_root_env() {
     fi
 }
 
-is_pid_alive() {
-    local pf="$1"
-    [[ -f "$pf" ]] && kill -0 "$(cat "$pf")" 2>/dev/null
-}
-
 # ────────────────────────────────────────────────────────────
-# RETENTION CRON (Plan C wiring)
+# RETENTION CRON
 # ────────────────────────────────────────────────────────────
 retention_cron_line() {
     echo "0 3 * * * bash $SCRIPTS_DIR/retention.sh run >> $RUN_DIR/retention.log 2>&1"
@@ -80,43 +72,100 @@ remove_retention_cron() {
 }
 
 # ────────────────────────────────────────────────────────────
+# TAILSCALE (private access to dashboard :9119 + health-api :8001)
+# ────────────────────────────────────────────────────────────
+_tailscale_online() {
+    # Exit 0 when the tailnet is up and authenticated. Try without sudo first,
+    # then non-interactive sudo (no prompt spam in the poll loop).
+    tailscale status --json 2>/dev/null | python3 -c 'import json,sys
+try:
+    sys.exit(0 if json.load(sys.stdin).get("Self", {}).get("Online") else 1)
+except Exception:
+    sys.exit(1)' 2>/dev/null \
+        || sudo -n tailscale status --json 2>/dev/null | python3 -c 'import json,sys
+try:
+    sys.exit(0 if json.load(sys.stdin).get("Self", {}).get("Online") else 1)
+except Exception:
+    sys.exit(1)' 2>/dev/null
+}
+
+_tailscale_ip() {
+    local ip
+    ip="$(tailscale ip -4 2>/dev/null | head -1)"
+    [[ -z "$ip" ]] && ip="$(sudo -n tailscale ip -4 2>/dev/null | head -1)"
+    echo "$ip"
+}
+
+ensure_tailscale() {
+    [[ "${HERMES_NO_TAILSCALE:-0}" == "1" ]] && { info "Tailscale setup skipped (HERMES_NO_TAILSCALE=1)."; return 0; }
+
+    if ! command -v tailscale &>/dev/null; then
+        if command -v sudo &>/dev/null; then
+            info "Installing Tailscale..."
+            curl -fsSL https://tailscale.com/install.sh | sudo sh 2>&1 | sed 's/^/  /' \
+                || { warn "Tailscale install failed — install manually: https://tailscale.com/download"; return 1; }
+        else
+            warn "tailscale not found and sudo unavailable — install manually: https://tailscale.com/download"
+            return 1
+        fi
+    fi
+
+    if ! _tailscale_online; then
+        info "Tailscale is not up — starting it and waiting for your browser login (up to 60s)..."
+        local out url
+        out="$(sudo tailscale up 2>&1 || true)"
+        echo "$out" | sed 's/^/  /'
+        url="$(echo "$out" | grep -oE 'https://login\.tailscale\.com/[A-Za-z0-9?&=.-]+' | head -1)"
+        [[ -n "$url" ]] && info "Log in here: $url"
+        for _ in $(seq 1 12); do
+            _tailscale_online && break
+            sleep 5
+        done
+        if ! _tailscale_online; then
+            warn "Tailscale login not completed — run 'sudo tailscale up' manually, then re-run init."
+            return 1
+        fi
+    fi
+
+    local ip
+    ip="$(_tailscale_ip)"
+    info "Tailscale up — tailnet IP: ${ip:-<unknown>}"
+    info "  dashboard:   http://${ip:-<ip>}:9119"
+    info "  health-api:  http://${ip:-<ip>}:8001  (set this as the URL in the Android app)"
+}
+
+ensure_tailscale_firewall() {
+    [[ "${HERMES_NO_TAILSCALE:-0}" == "1" ]] && return 0
+    if ! command -v ufw &>/dev/null; then
+        warn "ufw not installed — add firewall rules manually (see README 'Access (Tailscale)')."
+        return 0
+    fi
+    if ! sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        warn "ufw is not active — not enabling default-deny automatically (risk of lockout)."
+        warn "  To lock down to tailnet-only, run:"
+        warn "    sudo ufw default deny incoming"
+        warn "    sudo ufw allow 22/tcp"
+        warn "    sudo ufw allow in on tailscale0"
+        warn "    sudo ufw enable"
+        return 0
+    fi
+    info "Adding tailnet firewall rules (idempotent)..."
+    sudo ufw allow in on tailscale0 2>&1 | sed 's/^/  /' || warn "  could not add tailscale0 rule (run with sudo)."
+    sudo ufw allow 22/tcp 2>&1 | sed 's/^/  /' || true
+}
+
+# ────────────────────────────────────────────────────────────
 # INIT
 # ────────────────────────────────────────────────────────────
 cmd_init() {
     load_root_env
+    mkdir -p "$RUN_DIR"
 
-    if command -v hermes &>/dev/null; then
-        info "Hermes already installed at $(command -v hermes)"
-        hermes --version 2>&1 | head -1
-    else
-        info "Installing Hermes..."
-        bash <(curl -fsSL https://hermes-agent.nousresearch.com/install.sh)
-        if ! command -v hermes &>/dev/null; then
-            error "'hermes' not on PATH. Add $HOME/.local/bin to your PATH."
-            exit 1
-        fi
-    fi
+    info "Building Docker images (bot image, zen-proxy, health-api)..."
+    docker compose -f "$COMPOSE" build 2>&1 || { error "docker compose build failed."; exit 1; }
 
-    TOOLSETS_PY="$HERMES_HOME_DEFAULT/hermes-agent/toolsets.py"
-    PLATFORMS_PY="$HERMES_HOME_DEFAULT/hermes-agent/hermes_cli/platforms.py"
-
-    if [[ -f "$TOOLSETS_PY" ]] && ! grep -q "hermes-god" "$TOOLSETS_PY" 2>/dev/null; then
-        info "Patching toolsets.py: adding hermes-god toolset..."
-        sed -i '/^    "hermes-discord": {$/,/^    },$/c\
-    "hermes-god": {\
-        "description": "GOD Discord bot toolset - CLI + debugging + coding + Discord",\
-        "tools": [\
-            "discord",\
-            "discord_admin",\
-        ],\
-        "includes": ["hermes-cli", "debugging", "coding"]\
-    },' "$TOOLSETS_PY"
-        sed -i 's/hermes-discord/hermes-god/g' "$PLATFORMS_PY"
-        sed -i 's/"hermes-telegram", "hermes-discord"/"hermes-telegram", "hermes-god"/' "$TOOLSETS_PY"
-        info "hermes-god toolset patched."
-    fi
-
-    mkdir -p "$BOTS_DIR" "$RUN_DIR"
+    ensure_tailscale || true
+    ensure_tailscale_firewall || true
 
     local b
     for b in "${BOTS[@]}"; do
@@ -124,7 +173,7 @@ cmd_init() {
         if [[ ! -f "$REPO/profiles/$b/.env" ]]; then
             if [[ -f "$REPO/profiles/$b/.env.example" ]]; then
                 cp "$REPO/profiles/$b/.env.example" "$REPO/profiles/$b/.env"
-                warn "profiles/$b/.env created from example — EDIT IT (tokens, channel IDs, MONGODB_URI)."
+                warn "profiles/$b/.env created from example — EDIT IT (tokens, channel IDs)."
             else
                 warn "profiles/$b/.env missing and no example exists — create it."
             fi
@@ -137,9 +186,7 @@ cmd_init() {
             for skill_dir in "$REPO/skills"/*/; do
                 skill_name="$(basename "$skill_dir")"
                 target="$REPO/profiles/$b/skills/$skill_name"
-                if [[ -d "$target" ]]; then
-                    :
-                else
+                if [[ ! -d "$target" ]]; then
                     mkdir -p "$REPO/profiles/$b/skills"
                     cp -r "$skill_dir" "$target"
                     info "  $b: installed skill $skill_name"
@@ -148,223 +195,70 @@ cmd_init() {
         done
     fi
 
-    if ! python3 -c "import edge_tts" 2>/dev/null; then
-        info "Installing edge-tts for TTS..."
-        pip3 install edge-tts 2>&1 || warn "edge-tts install failed."
-    fi
-
-    if ! python3 -c "import nacl" 2>/dev/null || ! python3 -c "import davey" 2>/dev/null; then
-        info "Installing Discord voice deps (PyNaCl, davey)..."
-        pip3 install "PyNaCl>=1.5.0" davey 2>&1 || warn "Discord voice deps install failed."
-    fi
-
-    if ! python3 -c "import pymongo" 2>/dev/null; then
-        info "Installing pymongo (remote MongoDB driver)..."
-        pip3 install pymongo 2>&1 || warn "pymongo install failed."
-    fi
-
-    if ! dpkg -l libopus0 &>/dev/null 2>&1; then
-        if command -v apt-get &>/dev/null; then
-            info "Installing system audio deps (libopus0, ffmpeg)..."
-            sudo apt-get install -y libopus0 ffmpeg 2>&1 || warn "System audio deps install failed."
-        fi
-    fi
-
-    if ! command -v agent-browser &>/dev/null; then
-        info "Installing agent-browser (browser automation)..."
-        npm install -g agent-browser 2>&1 || warn "agent-browser npm install failed."
-        agent-browser install --with-deps 2>&1 || warn "agent-browser Chromium install failed."
-    fi
-
-    info "Setting up Python venvs for zen-proxy and health-api..."
-    setup_venv "venv-zen" "fastapi>=0.115,<1.0" "uvicorn[standard]>=0.34,<1.0" "httpx>=0.28,<1.0"
-    setup_venv "venv-health" "$(cat "$REPO/docker/health-api/requirements.txt" | tr '\n' ' ')"
-
     install_retention_cron
-
-    info "Running diagnostics..."
-    hermes doctor --fix 2>&1 || true
-    echo ""
-    info "Tool status by platform:"
-    hermes tools --summary 2>&1 || true
-
-    if [[ -d "$HERMES_HOME_DEFAULT/hermes-agent/web" && ! -d "$HERMES_HOME_DEFAULT/hermes-agent/web/dist" ]]; then
-        info "Pre-building dashboard UI..."
-        (cd "$HERMES_HOME_DEFAULT/hermes-agent/web" && npm install --silent && npm run build --silent) || \
-            warn "Dashboard UI build skipped."
-    fi
 
     echo
     info "Initialization complete."
     echo "  Next: edit profiles/*/.env with real tokens, then ./scripts/hermes.sh start"
-}
-
-setup_venv() {
-    local name="$1"; shift
-    local dir="$RUN_DIR/$name"
-    if [[ -x "$dir/bin/python" ]]; then
-        info "  venv $name already exists."
-        return 0
+    local _tip
+    _tip="$(_tailscale_ip)"
+    if [[ -n "$_tip" ]]; then
+        echo "  Access: dashboard at http://$_tip:9119 (Tailscale only)"
+    else
+        echo "  Access: dashboard on port 9119 (run 'sudo tailscale up' for the tailnet URL)"
     fi
-    info "  creating venv $name ..."
-    python3 -m venv "$dir"
-    "$dir/bin/pip" install --quiet --upgrade pip 2>/dev/null || true
-    "$dir/bin/pip" install --quiet "$@" || warn "  venv $name pip install failed."
 }
 
 # ────────────────────────────────────────────────────────────
-# START
+# START / STOP / RESTART
 # ────────────────────────────────────────────────────────────
-start_zen_proxy() {
-    if is_pid_alive "$PROXY_PID" && curl -sf http://localhost:4000/health >/dev/null 2>&1; then
-        info "zen-proxy already running."
-        return 0
-    fi
-    if [[ ! -x "$RUN_DIR/venv-zen/bin/uvicorn" ]]; then
-        error "zen-proxy venv missing — run init first."
-        return 1
-    fi
-    info "Starting zen-proxy (native uvicorn) on :4000 ..."
-    (
-        cd "$REPO/docker/proxy"
-        nohup "$RUN_DIR/venv-zen/bin/uvicorn" main:app --host 0.0.0.0 --port 4000 \
-            >> "$PROXY_LOG" 2>&1 &
-        echo $! > "$PROXY_PID"
-    )
-    for _ in $(seq 1 20); do
-        curl -sf http://localhost:4000/health >/dev/null 2>&1 && break
-        sleep 1
+legacy_native_bots() {
+    # PIDs left behind by the pre-Docker native launcher.
+    local pf found=0
+    for pf in "$RUN_DIR"/bots/*.pid; do
+        [[ -f "$pf" ]] || continue
+        if kill -0 "$(cat "$pf")" 2>/dev/null; then
+            warn "Stale NATIVE bot process found: $pf (PID $(cat "$pf"))."
+            warn "  Stop it before starting the Docker stack or Discord tokens will conflict."
+            found=1
+        fi
     done
-    curl -sf http://localhost:4000/health >/dev/null 2>&1 \
-        && active "zen-proxy healthy" \
-        || warn "zen-proxy not healthy yet — see $PROXY_LOG"
-}
-
-start_health_api() {
-    if is_pid_alive "$HEALTH_PID" && curl -sf http://localhost:8001/health >/dev/null 2>&1; then
-        info "health-api already running."
-        return 0
-    fi
-    if [[ ! -x "$RUN_DIR/venv-health/bin/uvicorn" ]]; then
-        error "health-api venv missing — run init first."
-        return 1
-    fi
-    info "Starting health-api (native uvicorn) on :8001 ..."
-    (
-        cd "$REPO/docker/health-api"
-        set -a
-        source "$REPO/.env"
-        [[ -f "$REPO/profiles/food/.env" ]] && source "$REPO/profiles/food/.env"
-        set +a
-        nohup "$RUN_DIR/venv-health/bin/uvicorn" main:app --host 0.0.0.0 --port 8001 \
-            >> "$HEALTH_LOG" 2>&1 &
-        echo $! > "$HEALTH_PID"
-    )
-    sleep 1
-    curl -sf http://localhost:8001/health >/dev/null 2>&1 \
-        && active "health-api healthy" \
-        || warn "health-api not healthy yet — see $HEALTH_LOG"
-}
-
-start_ui() {
-    if is_pid_alive "$UI_PID"; then
-        info "Dashboard already running (PID $(cat "$UI_PID"))."
-        return 0
-    fi
-    info "Starting dashboard on 0.0.0.0:$PORT (password auth from profiles/master/.env) ..."
-    (
-        set -a
-        [[ -f "$REPO/profiles/master/.env" ]] && source "$REPO/profiles/master/.env"
-        set +a
-        HERMES_HOME="$REPO/profiles/master" nohup hermes dashboard \
-            --host "${HERMES_DASHBOARD_HOST:-0.0.0.0}" --port "$PORT" --no-open --skip-build \
-            >> "$UI_LOG" 2>&1 &
-        echo $! > "$UI_PID"
-    )
-    for _ in $(seq 1 15); do
-        is_pid_alive "$UI_PID" || break
-        sleep 1
-    done
-    is_pid_alive "$UI_PID" \
-        && active "dashboard (PID $(cat "$UI_PID"), http://0.0.0.0:$PORT)" \
-        || error "dashboard failed to start — see $UI_LOG"
+    [[ "$found" == "1" ]] && return 1
+    return 0
 }
 
 cmd_start() {
     load_root_env
-    mkdir -p "$RUN_DIR" "$BOTS_DIR"
+    mkdir -p "$RUN_DIR"
 
-    info "Starting searxng (docker) ..."
-    docker compose -f "$DOCKER_COMPOSE_LIVE" up -d 2>&1 || warn "searxng start failed."
+    legacy_native_bots || {
+        warn "Native gateways still running — stopping them (legacy migration)."
+        local pf
+        for pf in "$RUN_DIR"/bots/*.pid; do
+            [[ -f "$pf" ]] || continue
+            if kill -0 "$(cat "$pf")" 2>/dev/null; then
+                kill "$(cat "$pf")" 2>/dev/null || true
+                sleep 2
+                kill -0 "$(cat "$pf")" 2>/dev/null && kill -9 "$(cat "$pf")" 2>/dev/null || true
+                info "  stopped native bot $(basename "$pf")"
+            fi
+        done
+    }
 
-    start_zen_proxy || exit 1
-    start_health_api || exit 1
-
-    info "Starting 5 Hermes gateways ..."
-    bash "$SCRIPTS_DIR/bots.sh" start
+    info "Starting Docker stack (searxng, zen-proxy, health-api, 5 bots, dashboard)..."
+    docker compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
 
     info "Running data retention ..."
-    bash "$SCRIPTS_DIR/retention.sh" 2>&1 | sed 's/^/  /' || true
-
-    start_ui
+    bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
 
     echo ""
     cmd_status
 }
 
-# ────────────────────────────────────────────────────────────
-# STOP
-# ────────────────────────────────────────────────────────────
-stop_ui() {
-    if is_pid_alive "$UI_PID"; then
-        local pid; pid="$(cat "$UI_PID")"
-        kill "$pid" 2>/dev/null || true
-        for _ in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-        kill -9 "$pid" 2>/dev/null || true
-        info "Dashboard stopped."
-    else
-        inactive "Dashboard (not running)"
-    fi
-    rm -f "$UI_PID"
-    # Best-effort: some installs spawn the dashboard under HERMES_HOME's own manager.
-    hermes dashboard --stop 2>&1 | grep -qi "stopped" && info "dashboard --stop ok" || true
-}
-
-stop_health_api() {
-    if is_pid_alive "$HEALTH_PID"; then
-        kill "$(cat "$HEALTH_PID")" 2>/dev/null || true
-        rm -f "$HEALTH_PID"
-        info "health-api stopped."
-    else
-        inactive "health-api (not running)"
-    fi
-}
-
-stop_zen_proxy() {
-    if is_pid_alive "$PROXY_PID"; then
-        kill "$(cat "$PROXY_PID")" 2>/dev/null || true
-        rm -f "$PROXY_PID"
-        info "zen-proxy stopped."
-    else
-        inactive "zen-proxy (not running)"
-    fi
-}
-
 cmd_stop() {
-    stop_ui
-    info "Stopping 5 Hermes gateways ..."
-    bash "$SCRIPTS_DIR/bots.sh" stop
-    stop_health_api
-    stop_zen_proxy
+    docker compose -f "$COMPOSE" down 2>&1 || warn "docker compose down failed."
 
-    if docker compose -f "$DOCKER_COMPOSE_LIVE" ps --status running 2>/dev/null | grep -q "searxng"; then
-        info "Stopping searxng ..."
-        docker compose -f "$DOCKER_COMPOSE_LIVE" down 2>&1 || warn "searxng stop failed."
-    else
-        inactive "searxng (not running)"
-    fi
-
-    # Stop the old single-instance systemd unit if it lingers from a previous setup.
+    # Best-effort: some previous setups still have a hermes-gateway systemd unit.
     if systemctl --user is-active hermes-gateway &>/dev/null 2>&1; then
         warn "Stopping legacy hermes-gateway systemd unit."
         systemctl --user stop hermes-gateway 2>&1 || true
@@ -374,9 +268,6 @@ cmd_stop() {
     info "All services stopped."
 }
 
-# ────────────────────────────────────────────────────────────
-# RESTART
-# ────────────────────────────────────────────────────────────
 cmd_restart() {
     echo "=== Stopping ===" && cmd_stop
     echo "" && echo "=== Starting ===" && cmd_start
@@ -386,37 +277,10 @@ cmd_restart() {
 # STATUS
 # ────────────────────────────────────────────────────────────
 cmd_status() {
-    echo "Hermes Agent Status" && echo ""
-
-    if docker compose -f "$DOCKER_COMPOSE_LIVE" ps --status running 2>/dev/null | grep -q "searxng"; then
-        active "SearXNG    (docker)"
-    else
-        inactive "SearXNG    (not running)"
-    fi
-
-    if is_pid_alive "$PROXY_PID" && curl -sf http://localhost:4000/health >/dev/null 2>&1; then
-        active "Zen Proxy  (PID $(cat "$PROXY_PID"), http://localhost:4000)"
-    else
-        inactive "Zen Proxy  (not running)"
-    fi
-
-    if is_pid_alive "$HEALTH_PID" && curl -sf http://localhost:8001/health >/dev/null 2>&1; then
-        active "Health API (PID $(cat "$HEALTH_PID"), http://localhost:8001)"
-    else
-        inactive "Health API (not running)"
-    fi
-
-    bash "$SCRIPTS_DIR/bots.sh" status
-
-    if is_pid_alive "$UI_PID"; then
-        active "Dashboard  (PID $(cat "$UI_PID"), http://0.0.0.0:$PORT)"
-    else
-        inactive "Dashboard  (not running)"
-    fi
-
+    echo "Hermes Agent Status (docker stack)" && echo ""
+    docker compose -f "$COMPOSE" ps
     echo ""
-    echo "Logs: $RUN_DIR/"
-    echo "Bot logs: $BOTS_DIR/"
+    echo "Logs: docker compose -f docker/docker-compose.yml logs -f <service>"
 }
 
 # ────────────────────────────────────────────────────────────
@@ -424,19 +288,19 @@ cmd_status() {
 # ────────────────────────────────────────────────────────────
 cmd_clean() {
     echo -e "${RED}This wipes:${NC}"
-    echo "  - run/ (venvs, PIDs, logs)"
-    echo "  - all profiles/* runtime state (sessions, memories, DBs, rendered config)"
+    echo "  - all profiles/* transient runtime state (sessions, logs, DBs, rendered config)"
     echo "  - profiles/*/.env (secrets) and the retention cron entry"
-    echo "  - Docker searxng data (compose down -v)"
-    echo "  - the Hermes install (~/.hermes + hermes CLI)"
-    echo -e "${RED}Remote MongoDB is NOT touched. Committed files are NOT touched.${NC}"
+    echo "  - Docker volumes (searxng data) and containers"
+    echo -e "${RED}Remote MongoDB is NOT touched. Committed files (skills, memories,"
+    echo -e "SOUL.md, templates) are KEPT. Committed files are NOT touched.${NC}"
     read -r -p "Type 'yes' to wipe everything: " answer
     if [[ "$answer" != "yes" ]]; then
         warn "Clean aborted."
         exit 0
     fi
 
-    cmd_stop
+    docker compose -f "$COMPOSE" down -v 2>&1 || true
+    info "Docker containers and volumes removed."
 
     remove_retention_cron
     rm -rf "$RUN_DIR"
@@ -446,16 +310,6 @@ cmd_clean() {
     for b in "${BOTS[@]}"; do
         wipe_profile "$b"
     done
-
-    docker compose -f "$DOCKER_COMPOSE_LIVE" down -v 2>&1 || true
-    info "Docker searxng data removed."
-
-    if command -v hermes &>/dev/null; then
-        info "Uninstalling Hermes..."
-        hermes uninstall --full --yes 2>&1 || true
-    fi
-    rm -rf "$HERMES_HOME_DEFAULT"
-    info "Hermes install removed."
 
     echo ""
     info "Clean complete. Re-run ./scripts/hermes.sh init to start over."
@@ -469,12 +323,10 @@ wipe_profile() {
     rm -f "$d/config.yaml" "$d/config.rendered.yaml" "$d/.env" \
         "$d/auth.lock" "$d/gateway.lock" "$d/channel_directory.json" \
         "$d/.skills_prompt_snapshot.json" "$d/.clean_shutdown"
-    rm -rf "$d"/.cache "$d"/.local "$d"/sessions "$d"/memories \
+    rm -rf "$d"/.cache "$d"/.local "$d"/sessions \
         "$d"/state "$d"/state.db* "$d"/logs "$d"/cron "$d"/kanban* \
         "$d"/gateway* "$d"/bin "$d"/data "$d"/image_cache "$d"/audio_cache \
-        "$d"/hooks "$d"/sandboxes "$d"/platforms "$d"/pairing "$d"/cache \
-        "$d"/skills/.usage.json* "$d"/skills/.curator_state \
-        "$d"/skills/nousresearch
+        "$d"/hooks "$d"/sandboxes "$d"/platforms "$d"/pairing "$d"/cache
 }
 
 # ────────────────────────────────────────────────────────────

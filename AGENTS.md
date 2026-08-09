@@ -15,34 +15,44 @@
 
 ## What this project is
 
-Runs **five native Hermes bots** (1 master coordinator + 4 domain bots) against
-a credit-aware LLM proxy: **OpenCode Zen** primary, **DeepInfra** fallback on
-credit/payment errors. Private SearXNG (the only live docker service), one
-Discord gateway per bot, a password-protected dashboard, and remote MongoDB for
-domain data (money, food, helldivers). Docker is used only for **searxng**
-(live) and the **test stack** — everything else runs natively via bash scripts.
+Runs **five Hermes bots** (1 master coordinator + 4 domain bots) against a
+credit-aware LLM proxy: **OpenCode Zen** primary, **DeepInfra** fallback on
+credit/payment errors. Private SearXNG, one Discord gateway per bot, a
+password-protected dashboard, and remote MongoDB for domain data (money, food,
+helldivers). **The live stack is fully Dockerized** — one compose file
+(`docker/docker-compose.yml`): searxng + zen-proxy + health-api + 5 bots +
+dashboard + a one-shot retention job. The `test/` stack is an isolated mirror
+with an in-stack MongoDB. No host Hermes install, no native processes.
 
 ```
 master ─┐
-story ──┤ native Hermes gateways (HERMES_HOME=profiles/<bot>)
-helldivers ├─► zen-proxy (:4000, native uvicorn)
-money ──┤    ── primary: OpenCode Zen ──► DeepInfra fallback on credit errors
-food ───┘    searxng (:8888, docker)  •  health-api (:8001, native uvicorn)
-             MongoDB (remote; money/food/helldivers)  •  dashboard (:9119, password)
+story ──┤ docker containers (HERMES_HOME=/hermes-home)
+helldivers ├─► zen-proxy (:4000)  ── primary: OpenCode Zen ──► DeepInfra fallback
+money ──┤    searxng (:8888)  •  health-api (:8001)  •  dashboard (:9119, password)
+food ───┘    MongoDB (remote; money/food/helldivers)  •  retention (one-shot container)
 ```
 
 ## Repo facts
 
 - `.env` and `profiles/*/.env` are git-ignored; only `.env.example` files are tracked.
 - Docs: `README.md` = quick start; `documentation.md` = deep dive.
-- `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`).
-- `scripts/bots.sh` = per-bot gateway lifecycle (master, story, helldivers, money, food).
-- `scripts/retention.sh` = data lifecycle; cron daily 03:00 installed by `init`,
-  also runs on every `start`. money wipes transactions >90d; food prunes date
-  rows >30d (never `food_weight`); helldivers (static) and story (no DB) are no-ops.
-- `tools/mongo.py` = shared pymongo CLI; `MONGODB_URI`/`MONGODB_DB` in root `.env`.
-- Docker: `docker/docker-compose.yml` = searxng ONLY (live); `test/` = full 5-bot
-  stack + proxy + health-api + in-stack `mongodb` (never touches remote cluster).
+- `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
+  a thin Docker orchestrator over `docker/docker-compose.yml`. No host installs.
+  `init` also sets up **Tailscale** (install + `up` with login URL + idempotent
+  ufw allow-rules on `tailscale0` when ufw is active; never auto-enables
+  default-deny). Skip with `HERMES_NO_TAILSCALE=1`. Dashboard (:9119) and
+  health-api (:8001) are reached **only over the tailnet**.
+- `scripts/retention.sh` = wrapper for the one-shot `retention` service
+  (`docker compose run --rm retention` → `tools/retention.py`); cron daily 03:00
+  installed by `init`, also runs on every `start`. money wipes transactions >90d;
+  food prunes date rows >30d (never `food_weight`); helldivers (static) and story
+  (no DB) are no-ops.
+- `tools/mongo.py` = shared pymongo CLI; `tools/retention.py` = data lifecycle.
+  `MONGODB_URI`/`MONGODB_DB` in root `.env`.
+- Docker: `docker/docker-compose.yml` = FULL live stack (searxng + zen-proxy +
+  health-api + 5 bots + dashboard + retention); `test/` = isolated mirror with an
+  in-stack `mongodb` (never touches remote cluster). Both share the bot image
+  built from `test/Dockerfile` + `test/entrypoint.sh` (bakes in `hermes-god`).
 - Proxy model map (`docker/proxy/main.py` `MODEL_MAP`):
   `deepseek-v4-flash-free` → `deepseek-ai/DeepSeek-V4-Flash`,
   `mimo-v2.5-free` → `MiniMaxAI/MiniMax-M3`. Fallback fires on HTTP 402 or
@@ -53,19 +63,22 @@ food ───┘    searxng (:8888, docker)  •  health-api (:8001, native uvi
   `discord.auto_thread: false` (inline replies, no threads), new conversation
   via built-in `/reset` (alias `/new`).
 - Bot config source is `profiles/<bot>/config.yaml.template` (`${HERMES_BASE_URL}`,
-  `${HERMES_CWD}`, master also `${DISCORD_HOME_CHANNEL}`). Launchers render it to
-  the git-ignored `profiles/<bot>/config.yaml`. Native: `localhost:4000/v1` +
-  `$REPO/workspace/<bot>`; test stack: `zen-proxy:4000/v1` + `/workspace`.
-- `init` PATCHES installed Hermes source with `sed`: injects the `hermes-god`
-  toolset into `~/.hermes/hermes-agent/toolsets.py` and swaps `hermes-discord`
-  → `hermes-god` in `hermes_cli/platforms.py`. Idempotent (grep-guarded), but a
-  Hermes upgrade can undo it.
-- Dashboard binds `0.0.0.0:9119` with `HERMES_HOME=profiles/master`; auth via
-  `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`/`_PASSWORD`/`_SECRET` in
-  `profiles/master/.env` (a public bind requires an auth provider).
+  `${HERMES_CWD}`, master also `${DISCORD_HOME_CHANNEL}`). `test/entrypoint.sh`
+  renders it to the git-ignored `profiles/<bot>/config.yaml` at container start
+  with docker defaults: `zen-proxy:4000/v1` + `/workspace`.
+- The `hermes-god` toolset is baked into the bot image (`test/Dockerfile`
+  patches `toolsets.py` + `platforms.py` at build time) — there is NO host
+  Hermes install to patch. `HERMES_MODE=dashboard` makes the same entrypoint run
+  `hermes dashboard` (uses the prebuilt `hermes_cli/web_dist`, no npm).
+- Dashboard binds `0.0.0.0:9119` with `HERMES_HOME=/hermes-home` (mounts
+  `profiles/master`); auth via `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`/`_PASSWORD`/
+  `_SECRET` in `profiles/master/.env` (a public bind requires an auth provider).
 - Skills: project skills live in `skills/` and are copied into every profile on
-  init. Hermes skill content (incl. autogenerated + `nousresearch/`) is
-  **committed**; only `.usage.json`/`.curator_state` bookkeeping is ignored.
+  init. Hermes skill content (incl. autogenerated + `nousresearch/`), the
+  skill-curator learning state (`.curator_state`/`.usage.json`), `memories/`,
+  and each `SOUL.md` are **committed** so bot personality + learned state
+  survives moving between VPSes. Only transient session/log/state files are
+  git-ignored.
 - No tests, linter, or CI in this repo; the proxy (`docker/proxy/main.py`) has
   zero tests. Verify with `bash -n scripts/*.sh` + render a template to /tmp,
   `docker compose -f docker/docker-compose.yml config`, then
@@ -80,8 +93,12 @@ food ───┘    searxng (:8888, docker)  •  health-api (:8001, native uvi
   for the searxng service now.
 - `auto_thread` defaults `true` in Hermes — must be disabled for a persistent
   shared channel conversation.
-- Legacy single-instance setup: if a `hermes-gateway` systemd unit survives,
-  `stop` best-effort stops it; `clean` removes `~/.hermes` entirely.
+- Legacy native install: `start` detects stale `run/bots/*.pid` processes and
+  stops them first; if a `hermes-gateway` systemd unit survives, `stop`
+  best-effort stops it. `clean` no longer touches `~/.hermes` (no host install).
+- Migration (first Docker start after the native era): stop old native bots /
+  dashboard / proxy / health-api before `./scripts/hermes.sh start`, or two
+  gateways will fight over the same Discord tokens.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
 - Shared sessions = one running-agent slot per channel (messages interrupt/
   queue), shared token costs.

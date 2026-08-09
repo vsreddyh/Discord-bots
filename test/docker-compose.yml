@@ -37,7 +37,7 @@ services:
     volumes:
       - ../profiles/master:/hermes-home
       - ../workspace/master:/workspace
-      - ../tools:/tools
+      - ../tools:/tools:ro
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -52,7 +52,7 @@ services:
     volumes:
       - ../profiles/story:/hermes-home
       - ../workspace/story:/workspace
-      - ../tools:/tools
+      - ../tools:/tools:ro
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -67,7 +67,7 @@ services:
     volumes:
       - ../profiles/helldivers:/hermes-home
       - ../workspace/helldivers:/workspace
-      - ../tools:/tools
+      - ../tools:/tools:ro
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -82,7 +82,7 @@ services:
     volumes:
       - ../profiles/money:/hermes-home
       - ../workspace/money:/workspace
-      - ../tools:/tools
+      - ../tools:/tools:ro
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
@@ -97,7 +97,7 @@ services:
     volumes:
       - ../profiles/food:/hermes-home
       - ../workspace/food:/workspace
-      - ../tools:/tools
+      - ../tools:/tools:ro
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
