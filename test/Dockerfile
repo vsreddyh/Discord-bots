@@ -25,13 +25,21 @@ if "hermes-god" not in src:
         '        "includes": ["hermes-cli", "debugging", "coding"]\n'
         '    },\n'
     )
-    src = re.sub(r'    "hermes-discord": \{\n.*?\n    \},\n', new_block, src, count=1, flags=re.S)
-    src = src.replace('"hermes-telegram", "hermes-discord"', '"hermes-telegram", "hermes-god"')
+    src, n = re.subn(r'    "hermes-discord": \{\n.*?\n    \},\n', new_block, src, count=1, flags=re.S)
+    if n != 1:
+        raise SystemExit("PATCH FAILED: hermes-discord block not found in toolsets.py — hermes-agent layout changed")
+    src2 = src.replace('"hermes-telegram", "hermes-discord"', '"hermes-telegram", "hermes-god"')
+    if src2 == src:
+        raise SystemExit("PATCH FAILED: hermes-discord reference not found in toolsets.py — layout changed")
+    src = src2
     toolsets.write_text(src)
 
 pf = platforms.read_text()
 if "hermes-god" not in pf:
-    platforms.write_text(pf.replace("hermes-discord", "hermes-god"))
+    pf2 = pf.replace("hermes-discord", "hermes-god")
+    if pf2 == pf:
+        raise SystemExit("PATCH FAILED: 'hermes-discord' not found in platforms.py — layout changed")
+    platforms.write_text(pf2)
 PY
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

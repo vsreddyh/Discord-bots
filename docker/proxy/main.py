@@ -27,6 +27,16 @@ MODEL_MAP = {
     "deepseek-v4-flash-free": "deepseek-ai/DeepSeek-V4-Flash",
     "mimo-v2.5-free": "MiniMaxAI/MiniMax-M3",
 }
+# The advertised /v1/models list is DERIVED from MODEL_MAP so the two can
+# never drift apart (they must always stay in sync).
+ZEN_MODELS = [
+    {"id": model, "object": "model", "owned_by": "opencode-zen"}
+    for model in MODEL_MAP
+]
+DEEPINFRA_MODELS = [
+    {"id": infra, "object": "model", "owned_by": "deepinfra"}
+    for infra in MODEL_MAP.values()
+]
 
 # ── Credit/payment error keywords (mirrors Hermes' _is_payment_error) ──
 PAYMENT_KEYWORDS = (
@@ -79,15 +89,7 @@ async def health():
 
 @app.get("/v1/models")
 async def list_models():
-    zen_models = [
-        {"id": "deepseek-v4-flash-free", "object": "model", "owned_by": "opencode-zen"},
-        {"id": "mimo-v2.5-free", "object": "model", "owned_by": "opencode-zen"},
-    ]
-    infra_models = [
-        {"id": "deepseek-ai/DeepSeek-V4-Flash", "object": "model", "owned_by": "deepinfra"},
-        {"id": "MiniMaxAI/MiniMax-M3", "object": "model", "owned_by": "deepinfra"},
-    ]
-    return {"object": "list", "data": zen_models + infra_models}
+    return {"object": "list", "data": ZEN_MODELS + DEEPINFRA_MODELS}
 
 
 async def _forward(
@@ -97,17 +99,23 @@ async def _forward(
     stream: bool,
 ) -> httpx.Response:
     client = await get_client()
-    return await client.post(
-        url,
-        headers=headers,
-        json=body,
-    )
+    request = client.build_request("POST", url, headers=headers, json=body)
+    return await client.send(request, stream=stream)
 
 
-def _build_response(resp: httpx.Response, stream: bool) -> Response:
-    if stream:
+async def _build_response(resp: httpx.Response, stream: bool) -> Response:
+    # Stream upstream success responses; always close the httpx response when
+    # done, or the connection leaks (client disconnect included).
+    if stream and resp.status_code < 400:
+        async def gen():
+            try:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+            finally:
+                await resp.aclose()
+
         return StreamingResponse(
-            resp.iter_bytes(),
+            gen(),
             status_code=resp.status_code,
             headers={
                 "content-type": "text/event-stream",
@@ -115,10 +123,15 @@ def _build_response(resp: httpx.Response, stream: bool) -> Response:
                 "x-accel-buffering": "no",
             },
         )
+
+    # Non-stream request, or an error response (body may already be consumed
+    # by the payment-error check — never re-stream a read body).
     try:
         data = resp.json()
     except Exception:
         data = {"error": {"message": resp.text[:2000]}}
+    if stream:
+        await resp.aclose()
     return JSONResponse(content=data, status_code=resp.status_code)
 
 
@@ -148,19 +161,21 @@ async def chat_completions(request: Request):
     )
 
     if zen_resp.status_code < 400 or not _is_payment_error(zen_resp):
-        return _build_response(zen_resp, stream)
+        return await _build_response(zen_resp, stream)
 
     # ── Credit/payment error — try DeepInfra fallback ────────
     di_model = MODEL_MAP.get(model)
     if not di_model:
         logger.warning("No fallback mapping for model %s, returning Zen error", model)
-        return _build_response(zen_resp, stream)
+        return await _build_response(zen_resp, stream)
 
     if not DEEPINFRA_API_KEY:
         logger.warning("DEEPINFRA_API_KEY not set, cannot fall back")
-        return _build_response(zen_resp, stream)
+        return await _build_response(zen_resp, stream)
 
     logger.info("Credit error on %s via Zen — falling back to DeepInfra (%s)", model, di_model)
+
+    await zen_resp.aclose()
 
     di_body = dict(body)
     di_body["model"] = di_model
@@ -177,4 +192,4 @@ async def chat_completions(request: Request):
         stream,
     )
 
-    return _build_response(di_resp, stream)
+    return await _build_response(di_resp, stream)

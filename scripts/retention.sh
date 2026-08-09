@@ -17,19 +17,11 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE="$REPO/docker/docker-compose.yml"
 
-# Fall back to sudo docker when the current session predates docker-group
-# membership (fresh install / first run).
-docker_compose() {
-    # --env-file: interpolation reads the single root .env (same as hermes.sh).
-    if docker info &>/dev/null 2>&1; then
-        docker compose --env-file "$REPO/.env" "$@"
-    else
-        sudo docker compose --env-file "$REPO/.env" "$@"
-    fi
-}
+# shellcheck source=scripts/lib/common.sh
+. "$REPO/scripts/lib/common.sh"
 
 if [[ "${1:-}" == "--dry-run" ]]; then
-    exec docker_compose -f "$COMPOSE" run --rm retention --dry-run
+    docker_compose -f "$COMPOSE" run --rm retention --dry-run
+else
+    docker_compose -f "$COMPOSE" run --rm retention
 fi
-
-exec docker_compose -f "$COMPOSE" run --rm retention

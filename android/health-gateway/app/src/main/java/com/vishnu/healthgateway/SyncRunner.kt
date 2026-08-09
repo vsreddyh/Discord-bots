@@ -43,7 +43,8 @@ object SyncRunner {
     private suspend fun backfill(client: SyncClient, manager: HealthConnectManager): SyncResult {
         val payloads = manager.collectBackfill()
         if (payloads.isEmpty()) {
-            return SyncResult(false, null, "no health data to backfill")
+            client.markFirstSyncDone()
+            return SyncResult(true, null, "no historical data to backfill")
         }
         var last: SyncResult = SyncResult(true, null, "")
         for (p in payloads) {

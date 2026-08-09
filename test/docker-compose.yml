@@ -1,3 +1,20 @@
+# ── Shared bot service definition (mirrors live stack) ──
+x-bot-base: &bot-base
+  build: .
+  user: "1000:1000"
+  volumes:
+    - ../tools:/tools:ro
+  environment: &bot-base-environment
+    HERMES_HOME: /hermes-home
+    HOME: /hermes-home
+    HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+    DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+    DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+  depends_on:
+    zen-proxy:
+      condition: service_healthy
+  restart: unless-stopped
+
 services:
 
   zen-proxy:
@@ -5,7 +22,9 @@ services:
       context: ../docker/proxy
     ports:
       - "4000:4000"
-    env_file: ../.env
+    environment:
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 10s
@@ -32,105 +51,60 @@ services:
 
   # ── Bot gateways ──────────────────────────────────────
   master:
-    build: .
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/master:/hermes-home
       - ../workspace/master:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   story:
-    build: .
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/story:/hermes-home
       - ../workspace/story:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_STORY:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_STORY:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   helldivers:
-    build: .
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/helldivers:/hermes-home
       - ../workspace/helldivers:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_HELLDIVERS:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_HELLDIVERS:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   money:
-    build: .
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/money:/hermes-home
       - ../workspace/money:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MONEY:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MONEY:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   food:
-    build: .
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/food:/hermes-home
       - ../workspace/food:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       USDA_API_KEY: ${USDA_API_KEY:-}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   # ── Health Connect sync endpoint (Android app → MongoDB) ──
   health-api:
@@ -139,10 +113,10 @@ services:
     user: "1000:1000"
     ports:
       - "8001:8000"
-    env_file: ../.env
     environment:
       MONGODB_URI: mongodb://mongodb:27017
       MONGODB_DB: hermes
+      HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
     depends_on:

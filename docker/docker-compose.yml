@@ -1,3 +1,28 @@
+# ──────────────────────────────────────────────────────
+# Shared bot service definition. Every bot binds its own profile + workspace
+# and gets its own Discord token/channel from the root .env. Per-bot values
+# are injected via the `environment` merge in each service block.
+# ──────────────────────────────────────────────────────
+x-bot-base: &bot-base
+  build:
+    context: ../test
+  user: "1000:1000"
+  volumes:
+    - ../tools:/tools:ro
+  environment: &bot-base-environment
+    HERMES_HOME: /hermes-home
+    HOME: /hermes-home
+    HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+    DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+    DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+    SEARXNG_URL: http://searxng:8080
+    MONGODB_URI: ${MONGODB_URI:-}
+    MONGODB_DB: ${MONGODB_DB:-hermes}
+  depends_on:
+    zen-proxy:
+      condition: service_healthy
+  restart: unless-stopped
+
 services:
 
   # ──────────────────────────────────────────────────────
@@ -29,7 +54,9 @@ services:
       context: ../docker/proxy
     ports:
       - "4000:4000"
-    env_file: ../.env
+    environment:
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 10s
@@ -49,8 +76,10 @@ services:
     user: "1000:1000"
     ports:
       - "8001:8000"
-    env_file: ../.env
     environment:
+      MONGODB_URI: ${MONGODB_URI:-}
+      MONGODB_DB: ${MONGODB_DB:-hermes}
+      HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
     healthcheck:
@@ -65,7 +94,7 @@ services:
   # Bot gateways — 1 master coordinator + 4 domain bots.
   # Same image as the test stack (test/Dockerfile + entrypoint.sh), which
   # bakes in the hermes-god toolset. Each bot bind-mounts its own profile
-  # (HERMES_HOME), workspace, and the shared /tools helper read-only.
+  # (HERMES_HOME) + workspace.
   #
   # ALL env comes from the single root .env (compose interpolation), mapped
   # per service — one Discord token/home channel per bot. Deliberately NOT
@@ -73,125 +102,60 @@ services:
   # SEARXNG_URL=localhost:8888, which would break web search in-container).
   # ──────────────────────────────────────────────────────
   master:
-    build:
-      context: ../test
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/master:/hermes-home
       - ../workspace/master:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-      SEARXNG_URL: http://searxng:8080
-      MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB:-hermes}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   story:
-    build:
-      context: ../test
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/story:/hermes-home
       - ../workspace/story:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_STORY:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_STORY:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-      SEARXNG_URL: http://searxng:8080
-      MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB:-hermes}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   helldivers:
-    build:
-      context: ../test
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/helldivers:/hermes-home
       - ../workspace/helldivers:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_HELLDIVERS:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_HELLDIVERS:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-      SEARXNG_URL: http://searxng:8080
-      MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB:-hermes}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   money:
-    build:
-      context: ../test
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/money:/hermes-home
       - ../workspace/money:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MONEY:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MONEY:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-      SEARXNG_URL: http://searxng:8080
-      MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB:-hermes}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   food:
-    build:
-      context: ../test
-    user: "1000:1000"
+    <<: *bot-base
     volumes:
       - ../profiles/food:/hermes-home
       - ../workspace/food:/workspace
       - ../tools:/tools:ro
     environment:
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      <<: *bot-base-environment
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       USDA_API_KEY: ${USDA_API_KEY:-}
-      SEARXNG_URL: http://searxng:8080
-      MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB:-hermes}
-    depends_on:
-      zen-proxy:
-        condition: service_healthy
-    restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
   # Dashboard — password-protected web UI for the master profile.

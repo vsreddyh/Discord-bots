@@ -59,10 +59,10 @@ def load_json(raw: str) -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser(prog="mongo.py")
-    p.add_argument("collection")
     p.add_argument("command", choices=[
         "get", "count", "insert", "insert-many", "upsert", "delete", "drop", "aggregate",
     ])
+    p.add_argument("collection")
     p.add_argument("args", nargs="*", help="JSON arguments (filter/doc/pipeline)")
 
     ns = p.parse_args()

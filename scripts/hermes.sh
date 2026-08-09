@@ -17,6 +17,9 @@ RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
 BOTS=(master story helldivers money food)
 
+# shellcheck source=scripts/lib/common.sh
+. "$REPO/scripts/lib/common.sh"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
@@ -36,12 +39,6 @@ Commands:
   status     Show all service states
   clean      Wipe everything (profiles state, docker volumes, cron). Destructive.
 EOF
-}
-
-load_root_env() {
-    if [[ -f "$REPO/.env" ]]; then
-        set -a; source "$REPO/.env"; set +a
-    fi
 }
 
 # ────────────────────────────────────────────────────────────
@@ -160,19 +157,6 @@ ensure_tailscale_firewall() {
 # ────────────────────────────────────────────────────────────
 # HOST TOOLS (docker, curl, python, cron, opencode)
 # ────────────────────────────────────────────────────────────
-# Run docker compose, transparently falling back to sudo when the current
-# session predates docker-group membership (fresh install / first run).
-docker_compose() {
-    # --env-file: interpolation reads the single root .env. Without it, compose
-    # looks for .env in the compose file's dir (docker/ or test/) and every
-    # ${VAR} (tokens, MONGODB_URI, ...) silently falls back to empty/default.
-    if docker info &>/dev/null 2>&1; then
-        docker compose --env-file "$REPO/.env" "$@"
-    else
-        sudo docker compose --env-file "$REPO/.env" "$@"
-    fi
-}
-
 # apt-install <pkgs...> — runs apt-get install, prints output indented, and
 # returns apt's real exit code (the pipe to sed must not mask failures).
 apt_install() {

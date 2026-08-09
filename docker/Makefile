@@ -1,23 +1,25 @@
-.PHONY: up down restart logs status shell setup build
+.PHONY: up down restart logs status setup build
+
+COMPOSE := docker compose --env-file ../.env -f docker-compose.yml
 
 up:
-	docker compose up -d
+	$(COMPOSE) up -d
 
 down:
-	docker compose down
+	$(COMPOSE) down
 
 restart:
-	docker compose down && docker compose up -d
+	$(COMPOSE) down && $(COMPOSE) up -d
 
 logs:
-	docker compose logs -f
+	$(COMPOSE) logs -f
 
 status:
-	docker compose ps
+	$(COMPOSE) ps
 
 setup:
-	cp -n .env.example .env || echo ".env already exists — edit it to add your API keys"
-	docker compose up -d
+	cp -n ../.env.example ../.env || echo ".env already exists — edit it to add your API keys"
+	$(COMPOSE) up -d
 
 build:
-	docker compose build --no-cache
+	$(COMPOSE) build --no-cache

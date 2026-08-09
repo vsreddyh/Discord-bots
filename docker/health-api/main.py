@@ -17,10 +17,9 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -37,15 +36,28 @@ app = FastAPI(title="Health Sync API")
 _raw_tokens = os.environ.get("HEALTH_API_TOKENS", "") or os.environ.get("HEALTH_SYNC_TOKEN", "")
 TOKENS = {t.strip() for t in _raw_tokens.split(",") if t.strip()}
 
+_client: MongoClient | None = None
+
 
 def _get_db():
+    global _client
     if MongoClient is None:
         raise RuntimeError("pymongo not installed")
     uri = os.environ.get("MONGODB_URI", "").strip()
     if not uri:
         raise RuntimeError("MONGODB_URI not set")
     db_name = os.environ.get("MONGODB_DB", "hermes").strip() or "hermes"
-    return MongoClient(uri, serverSelectionTimeoutMS=8000)[db_name]
+    if _client is None:
+        _client = MongoClient(uri, serverSelectionTimeoutMS=8000)
+    return _client[db_name]
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
 
 
 # ── Models matching the Android app's HealthSyncPayload ──
@@ -61,15 +73,15 @@ class WorkoutEntry(BaseModel):
     endIso: str
     title: str = "Workout"
     type: str = "WORKOUT"
-    distanceMeters: Optional[float] = None
-    caloriesKcal: Optional[float] = None
+    distanceMeters: float | None = None
+    caloriesKcal: float | None = None
 
 
 class HealthSyncPayload(BaseModel):
     device: str = "Redmi Watch 5 Lite"
     syncedAtIso: str
-    steps: Optional[int] = None
-    activeCaloriesKcal: Optional[float] = None
+    steps: int | None = None
+    activeCaloriesKcal: float | None = None
     sleep: list[SleepEntry] = Field(default_factory=list)
     workouts: list[WorkoutEntry] = Field(default_factory=list)
 
@@ -82,7 +94,7 @@ def _local_date(iso: str) -> str:
         return iso[:10]
 
 
-def _authorize(authorization: Optional[str]) -> None:
+def _authorize(authorization: str | None) -> None:
     if not TOKENS:
         logger.warning("HEALTH_API_TOKENS not set — rejecting all requests")
         raise HTTPException(status_code=503, detail="server not configured with tokens")
@@ -99,7 +111,7 @@ async def health():
 
 
 @app.post("/api/health/sync")
-async def sync(payload: HealthSyncPayload, authorization: Optional[str] = Header(None)):
+async def sync(payload: HealthSyncPayload, authorization: str | None = Header(None)):
     _authorize(authorization)
 
     synced_at = datetime.now(timezone.utc).isoformat()
@@ -207,7 +219,7 @@ async def _post_discord_update(payload: HealthSyncPayload) -> None:
         logger.warning("Discord post failed: %s", e)
 
 
-def _minutes_between(start_iso: str, end_iso: str) -> Optional[int]:
+def _minutes_between(start_iso: str, end_iso: str) -> int | None:
     try:
         s = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
         e = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
