@@ -3,13 +3,17 @@
 Fully Dockerized stack: 5 Hermes bots + zen-proxy + searxng + health-api + dashboard + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
+**Key fact: no LLM inference happens on this box.** OpenCode Zen / DeepInfra run the models, the
+bots just stream text. Bots are I/O-bound (they wait on Discord + the network), so CPU and RAM
+stay modest. No GPU needed.
+
 Concurrency tiers = number of Hermes agents running at the same time.
 
 | Tier | RAM | CPU | Disk | Network |
 |---|---|---|---|---|
-| Minimum — 1 agent at a time | 4.8 GB | 2 vCPU | 40 GB | 100 Mbps |
-| Recommended — 2 at the same time | 6.4 GB | 4 vCPU | 80 GB | 500 Mbps |
-| Maximum — all 5 at the same time | 12.8 GB | 8 vCPU | 120 GB | 1 Gbps |
+| Minimum — 1 agent at a time | 4 GB | 2 vCPU | 30 GB | 100 Mbps |
+| Recommended — 2 at the same time | 6 GB | 2 vCPU | 50 GB | 100 Mbps |
+| Maximum — all 5 at the same time | 8 GB | 4 vCPU | 80 GB | 100 Mbps |
 
 ## OS
 
@@ -24,26 +28,33 @@ Fixed base, all 10 services resident but idle: **~3.5 GB**
 - searxng ~0.3 GB, zen-proxy ~0.15 GB, health-api ~0.15 GB, dashboard ~0.15 GB
 - Docker + OS ≈ 1.0 GB
 
-Each **concurrently active agent** adds ~1 GB on top (LLM streaming, conversation context, tool output).
+Each **concurrently active agent** adds ~0.6 GB (conversation context + tool output; the model
+itself runs elsewhere).
 
-- Minimum (1 active): 3.5 + 1.0 + 0.3 headroom = **4.8 GB**
-- Recommended (2 active): 3.5 + 2.0 + 0.7 headroom = **6.4 GB**
-- Maximum (5 active): 3.5 + 5.0 + 2.5 headroom = **12.8 GB**
+- Minimum (1 active): 3.5 + 0.6 + headroom = **4 GB**
+- Recommended (2 active): 3.5 + 1.2 + headroom = **6 GB**
+- Maximum (5 active): 3.5 + 3.0 + headroom = **8 GB**
 
-Add ~2 GB swap in every tier as a spike buffer. If the provider only sells whole GB, round up (5 / 7 / 13).
+Add ~2 GB swap as a spike buffer. These already match common provider tiers (4/6/8).
+
+## CPU
+
+- Agents are I/O-bound; 2 vCPU handles the minimum and recommended tiers comfortably.
+- Searxng spawns a short-lived worker per search query — the only real CPU spike.
+- 4 vCPU only for the all-5-at-once tier as breathing room. More is wasted.
 
 ## Disk — whole numbers
 
 - Docker images are small: bot image 457 MB, searxng 258 MB, zen-proxy 187 MB, health-api 198 MB → ~1.5 GB total.
-- Real consumers: container writable layers, Docker logs from 5 chatty bots, profile state, backups.
-- Minimum 40 GB is the floor; recommended 80 GB leaves room for logs + snapshots; 120 GB for max comfort.
-- Enable Docker log rotation (`max-size`) if you stay on the minimum tier.
+- Real consumers: container writable layers, Docker logs from chatty bots, profile state, backups.
+- 30 GB is the floor; 50 GB leaves room for logs + snapshots; 80 GB for max comfort.
+- Enable Docker log rotation (`max-size`) to keep the floor low.
 
 ## Network
 
-- Discord WebSocket + REST and LLM streaming are all light — **latency to Discord/LLM providers matters more than raw bandwidth**.
+- Discord WebSocket + REST and LLM text streaming are small; **latency matters, bandwidth barely does**.
+- **100 Mbps is enough for every tier.** Only pay for more if the provider bundles it at no cost.
 - Tailscale adds negligible overhead (WireGuard is CPU-light).
-- 100 Mbps works for the minimum tier; 500 Mbps–1 Gbps removes all doubt for heavy multi-agent use.
 
 ## Access
 
