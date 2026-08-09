@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+from collections import deque
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import FastAPI, Request
@@ -52,6 +55,103 @@ PAYMENT_KEYWORDS = (
 )
 
 _client: httpx.AsyncClient | None = None
+
+# ── Live usage tracking ─────────────────────────────────
+# Aggregates every proxied request (in-memory; cleared on restart) so the
+# actual token burn of the bots can be inspected live via GET /usage and in
+# `docker logs` via the `USAGE ...` lines.
+USAGE = {
+    "since": datetime.now(timezone.utc).isoformat(),
+    "requests": 0,
+    "streams": 0,
+    "errors": 0,
+    "tokens": {"prompt": 0, "completion": 0, "total": 0},
+    "by_model": {},
+    "by_backend": {},
+    "recent": deque(maxlen=200),
+}
+
+
+def _empty_agg() -> dict:
+    return {"requests": 0, "errors": 0, "prompt": 0, "completion": 0, "total": 0}
+
+
+def _record_usage(
+    model: str,
+    backend: str,
+    status: int,
+    stream: bool,
+    usage: dict | None,
+) -> None:
+    """Fold one finished request into USAGE."""
+    prompt = (usage or {}).get("prompt_tokens", 0)
+    completion = (usage or {}).get("completion_tokens", 0)
+    total = (usage or {}).get("total_tokens", 0) or (prompt + completion)
+    error = status >= 400
+
+    USAGE["requests"] += 1
+    if stream:
+        USAGE["streams"] += 1
+    if error:
+        USAGE["errors"] += 1
+
+    USAGE["tokens"]["prompt"] += prompt
+    USAGE["tokens"]["completion"] += completion
+    USAGE["tokens"]["total"] += total
+
+    agg = USAGE["by_model"].setdefault(model, _empty_agg())
+    agg["requests"] += 1
+    if error:
+        agg["errors"] += 1
+    agg["prompt"] += prompt
+    agg["completion"] += completion
+    agg["total"] += total
+
+    b_agg = USAGE["by_backend"].setdefault(backend, _empty_agg())
+    b_agg["requests"] += 1
+    if error:
+        b_agg["errors"] += 1
+    b_agg["prompt"] += prompt
+    b_agg["completion"] += completion
+    b_agg["total"] += total
+
+    USAGE["recent"].append({
+        "at": datetime.now(timezone.utc).isoformat(),
+        "model": model,
+        "backend": backend,
+        "status": status,
+        "stream": stream,
+        "prompt": prompt,
+        "completion": completion,
+        "total": total,
+    })
+    logger.info(
+        "USAGE backend=%s model=%s status=%d stream=%s prompt=%d completion=%d total=%d",
+        backend, model, status, stream, prompt, completion, total,
+    )
+
+
+def _parse_sse_usage(raw: bytes) -> dict | None:
+    """Return the LAST `usage` object from SSE data lines, if any.
+
+    Providers may emit a usage object in every chunk (growing completion),
+    so we must keep the final one rather than the first.
+    """
+    found: dict | None = None
+    for line in raw.split(b"\n"):
+        line = line.strip()
+        if not line.startswith(b"data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == b"[DONE]":
+            continue
+        try:
+            obj = json.loads(payload)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("usage"), dict):
+            found = obj["usage"]
+    return found
 
 
 async def get_client() -> httpx.AsyncClient:
@@ -103,16 +203,30 @@ async def _forward(
     return await client.send(request, stream=stream)
 
 
-async def _build_response(resp: httpx.Response, stream: bool) -> Response:
+async def _build_response(
+    resp: httpx.Response,
+    stream: bool,
+    model: str,
+    backend: str,
+) -> Response:
     # Stream upstream success responses; always close the httpx response when
     # done, or the connection leaks (client disconnect included).
     if stream and resp.status_code < 400:
         async def gen():
+            usage: dict | None = None
+            buffer = b""
             try:
                 async for chunk in resp.aiter_bytes():
+                    buffer += chunk
+                    if len(buffer) > 65536:
+                        buffer = buffer[-65536:]  # keep the tail; usage arrives at the end
+                    parsed = _parse_sse_usage(buffer)
+                    if parsed:
+                        usage = parsed
                     yield chunk
             finally:
                 await resp.aclose()
+                _record_usage(model, backend, resp.status_code, True, usage)
 
         return StreamingResponse(
             gen(),
@@ -130,9 +244,26 @@ async def _build_response(resp: httpx.Response, stream: bool) -> Response:
         data = resp.json()
     except Exception:
         data = {"error": {"message": resp.text[:2000]}}
+    usage = data.get("usage") if isinstance(data, dict) else None
     if stream:
         await resp.aclose()
+    _record_usage(model, backend, resp.status_code, stream, usage)
     return JSONResponse(content=data, status_code=resp.status_code)
+
+
+@app.get("/usage")
+async def usage():
+    """Live view of every proxied request since the proxy started."""
+    return {
+        "since": USAGE["since"],
+        "requests": USAGE["requests"],
+        "streams": USAGE["streams"],
+        "errors": USAGE["errors"],
+        "tokens": USAGE["tokens"],
+        "by_model": USAGE["by_model"],
+        "by_backend": USAGE["by_backend"],
+        "recent": list(USAGE["recent"]),
+    }
 
 
 @app.post("/v1/chat/completions")
@@ -161,17 +292,17 @@ async def chat_completions(request: Request):
     )
 
     if zen_resp.status_code < 400 or not _is_payment_error(zen_resp):
-        return await _build_response(zen_resp, stream)
+        return await _build_response(zen_resp, stream, model, "zen")
 
     # ── Credit/payment error — try DeepInfra fallback ────────
     di_model = MODEL_MAP.get(model)
     if not di_model:
         logger.warning("No fallback mapping for model %s, returning Zen error", model)
-        return await _build_response(zen_resp, stream)
+        return await _build_response(zen_resp, stream, model, "zen")
 
     if not DEEPINFRA_API_KEY:
         logger.warning("DEEPINFRA_API_KEY not set, cannot fall back")
-        return await _build_response(zen_resp, stream)
+        return await _build_response(zen_resp, stream, model, "zen")
 
     logger.info("Credit error on %s via Zen — falling back to DeepInfra (%s)", model, di_model)
 
@@ -192,4 +323,4 @@ async def chat_completions(request: Request):
         stream,
     )
 
-    return await _build_response(di_resp, stream)
+    return await _build_response(di_resp, stream, di_model, "deepinfra")

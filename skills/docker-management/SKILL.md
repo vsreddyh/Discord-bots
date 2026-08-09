@@ -35,6 +35,16 @@ docker compose -f docker/docker-compose.yml restart zen-proxy
 docker compose -f docker/docker-compose.yml up -d --build zen-proxy
 ```
 
+### Always clean the build cache after building
+Build cache grows fast (7.6 GB on this box) and never shrinks on its own.
+Run this after every `--build` / `up -d --build`:
+```bash
+docker builder prune -f        # drop dangling build cache
+```
+- Run it **every build**, not occasionally.
+- `-f` = no prompt. Safe — only removes cached layers, never images/containers.
+- Size check: `docker system df`
+
 ### Health check
 ```bash
 curl -s http://localhost:4000/health
