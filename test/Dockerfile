@@ -1,11 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
-ENV PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git openssh-client curl sqlite3 && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache bash git openssh-client curl sqlite
 
 RUN pip install --no-cache-dir hermes-agent 'discord.py[voice]==2.7.1' pymongo
 

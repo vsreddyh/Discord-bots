@@ -17,8 +17,18 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE="$REPO/docker/docker-compose.yml"
 
+# Fall back to sudo docker when the current session predates docker-group
+# membership (fresh install / first run).
+docker_compose() {
+    if docker info &>/dev/null 2>&1; then
+        docker compose "$@"
+    else
+        sudo docker compose "$@"
+    fi
+}
+
 if [[ "${1:-}" == "--dry-run" ]]; then
-    exec docker compose -f "$COMPOSE" run --rm retention --dry-run
+    exec docker_compose -f "$COMPOSE" run --rm retention --dry-run
 fi
 
-exec docker compose -f "$COMPOSE" run --rm retention
+exec docker_compose -f "$COMPOSE" run --rm retention

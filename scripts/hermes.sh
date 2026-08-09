@@ -4,9 +4,11 @@ set -euo pipefail
 # Fully-Dockerized live stack orchestrator.
 #
 # Everything (searxng, zen-proxy, health-api, 5 bots, dashboard, retention)
-# runs as compose services in docker/docker-compose.yml. init only builds the
-# images, seeds per-profile .env files, copies skills, and installs the
-# retention cron. No host Hermes install, venvs, or native processes.
+# runs as compose services in docker/docker-compose.yml. init self-installs the
+# host tools it needs (curl, docker + compose, python3, cron, Tailscale,
+# opencode), builds the images, seeds per-profile .env files, copies skills,
+# and installs the retention cron. Only git + sudo must pre-exist.
+# No host Hermes install, venvs, or native processes.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -155,8 +157,65 @@ ensure_tailscale_firewall() {
 }
 
 # ────────────────────────────────────────────────────────────
-# HOST TOOLS (opencode CLI, python)
+# HOST TOOLS (docker, curl, python, cron, opencode)
 # ────────────────────────────────────────────────────────────
+# Run docker compose, transparently falling back to sudo when the current
+# session predates docker-group membership (fresh install / first run).
+docker_compose() {
+    if docker info &>/dev/null 2>&1; then
+        docker compose "$@"
+    else
+        sudo docker compose "$@"
+    fi
+}
+
+# apt-install <pkgs...> — runs apt-get install, prints output indented, and
+# returns apt's real exit code (the pipe to sed must not mask failures).
+apt_install() {
+    local out rc
+    set +e
+    sudo apt-get update -qq 2>/dev/null
+    out="$(sudo apt-get install -y "$@" 2>&1)"
+    rc=$?
+    set -e
+    printf '%s\n' "$out" | sed 's/^/  /'
+    return "$rc"
+}
+
+ensure_curl() {
+    command -v curl &>/dev/null && return 0
+    info "curl not found — installing (needed by tailscale + opencode installers)."
+    apt_install curl || { warn "curl install failed — install curl manually."; return 1; }
+    info "curl installed."
+}
+
+ensure_docker() {
+    if command -v docker &>/dev/null; then
+        if docker compose version &>/dev/null 2>&1; then
+            info "docker + compose plugin available."
+        else
+            info "docker present — installing compose plugin..."
+            apt_install docker-compose-v2 docker-compose-plugin 2>/dev/null \
+                || { warn "compose plugin install failed."; return 1; }
+        fi
+    else
+        info "docker not found — installing docker.io + compose plugin..."
+        if ! apt_install docker.io docker-compose-v2; then
+            # Some distros/repos name the plugin differently (Docker Inc repo).
+            apt_install docker.io docker-compose-plugin || {
+                warn "docker install failed — install manually: https://docs.docker.com/engine/install/"
+                return 1
+            }
+        fi
+        sudo systemctl enable --now docker 2>&1 | sed 's/^/  /' || true
+    fi
+    if [[ "$(id -u)" != "0" ]] && ! id -nG | grep -qw docker; then
+        info "Adding $USER to the docker group..."
+        sudo usermod -aG docker "$USER" 2>&1 | sed 's/^/  /' || true
+        warn "Docker group access applies after re-login; init uses sudo for docker until then."
+    fi
+}
+
 ensure_python() {
     if command -v python3 &>/dev/null &&
         python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
@@ -164,9 +223,17 @@ ensure_python() {
         return 0
     fi
     warn "python3 >= 3.9 not found — installing python3 + pip (host tooling)."
-    sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv 2>&1 | sed 's/^/  /' \
+    apt_install python3 python3-pip python3-venv \
         || { warn "python install failed — install python3 manually."; return 1; }
     info "python3 installed: $(python3 --version 2>&1)."
+}
+
+ensure_cron() {
+    command -v crontab &>/dev/null && return 0
+    info "cron not found — installing."
+    apt_install cron || { warn "cron install failed — retention won't schedule."; return 1; }
+    sudo systemctl enable --now cron 2>&1 | sed 's/^/  /' || true
+    info "cron installed."
 }
 
 ensure_opencode() {
@@ -175,14 +242,26 @@ ensure_opencode() {
         info "opencode already installed ($(opencode --version 2>/dev/null || echo '?'))."
         return 0
     fi
+    ensure_curl || return 1
     info "Installing opencode CLI..."
     if ! curl -fsSL https://opencode.ai/install | bash; then
         warn "opencode install failed — install manually: https://opencode.ai/docs/install"
         return 1
     fi
     if ! command -v opencode &>/dev/null; then
-        warn "opencode installed but not on PATH — restart the shell or source ~/.bashrc, then re-run init."
-        return 1
+        # The installer drops the binary in ~/.opencode/bin, which may not be
+        # on PATH for non-interactive shells — symlink it into /usr/local/bin.
+        local bin=""
+        for c in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+            [[ -x "$c" ]] && { bin="$c"; break; }
+        done
+        if [[ -n "$bin" ]]; then
+            info "opencode installed to $bin — symlinking into /usr/local/bin."
+            sudo ln -sf "$bin" /usr/local/bin/opencode
+        else
+            warn "opencode install path not found — install manually: https://opencode.ai/docs/install"
+            return 1
+        fi
     fi
     info "opencode installed: $(opencode --version 2>/dev/null)."
 }
@@ -191,16 +270,27 @@ ensure_opencode() {
 # INIT
 # ────────────────────────────────────────────────────────────
 cmd_init() {
+    if [[ ! -f "$REPO/.env" ]]; then
+        if [[ -f "$REPO/.env.example" ]]; then
+            cp "$REPO/.env.example" "$REPO/.env"
+            warn "root .env created from .env.example — EDIT IT (API keys, Mongo URI)."
+        else
+            warn "root .env missing and no .env.example exists — create it (zen-proxy/health-api need it)."
+        fi
+    fi
     load_root_env
     mkdir -p "$RUN_DIR"
 
-    info "Building Docker images (bot image, zen-proxy, health-api)..."
-    docker compose -f "$COMPOSE" build 2>&1 || { error "docker compose build failed."; exit 1; }
-
+    ensure_curl || true
+    ensure_docker || true
     ensure_tailscale || true
     ensure_tailscale_firewall || true
     ensure_python || true
     ensure_opencode || true
+    ensure_cron || true
+
+    info "Building Docker images (bot image, zen-proxy, health-api)..."
+    docker_compose -f "$COMPOSE" build 2>&1 || { error "docker compose build failed."; exit 1; }
 
     local b
     for b in "${BOTS[@]}"; do
@@ -281,7 +371,7 @@ cmd_start() {
     }
 
     info "Starting Docker stack (searxng, zen-proxy, health-api, 5 bots, dashboard)..."
-    docker compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
+    docker_compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
 
     info "Running data retention ..."
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
@@ -291,7 +381,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-    docker compose -f "$COMPOSE" down 2>&1 || warn "docker compose down failed."
+    docker_compose -f "$COMPOSE" down 2>&1 || warn "docker compose down failed."
 
     # Best-effort: some previous setups still have a hermes-gateway systemd unit.
     if systemctl --user is-active hermes-gateway &>/dev/null 2>&1; then
@@ -313,7 +403,7 @@ cmd_restart() {
 # ────────────────────────────────────────────────────────────
 cmd_status() {
     echo "Hermes Agent Status (docker stack)" && echo ""
-    docker compose -f "$COMPOSE" ps
+    docker_compose -f "$COMPOSE" ps
     echo ""
     echo "Logs: docker compose -f docker/docker-compose.yml logs -f <service>"
 }
@@ -334,7 +424,7 @@ cmd_clean() {
         exit 0
     fi
 
-    docker compose -f "$COMPOSE" down -v 2>&1 || true
+    docker_compose -f "$COMPOSE" down -v 2>&1 || true
     info "Docker containers and volumes removed."
 
     remove_retention_cron

@@ -38,10 +38,13 @@ food ───┘    MongoDB (remote; money/food/helldivers)  •  retention (on
 - Docs: `README.md` = quick start; `documentation.md` = deep dive.
 - `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
   a thin Docker orchestrator over `docker/docker-compose.yml`. No host installs.
-  `init` also sets up **Tailscale** (install + `up` with login URL + idempotent
+  `init` self-installs the host tools it needs: **docker + compose, curl,
+  python3, cron, opencode CLI** (only git + sudo must pre-exist), plus
+  **Tailscale** (install + `up` with login URL + idempotent
   ufw allow-rules on `tailscale0` when ufw is active; never auto-enables
-  default-deny). Skip with `HERMES_NO_TAILSCALE=1`. Dashboard (:9119) and
-  health-api (:8001) are reached **only over the tailnet**.
+  default-deny). Skip Tailscale with `HERMES_NO_TAILSCALE=1`, opencode with
+  `HERMES_NO_OPENCODE=1`. Dashboard (:9119) and health-api (:8001) are reached
+  **only over the tailnet**.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`docker compose run --rm retention` → `tools/retention.py`); cron daily 03:00
   installed by `init`, also runs on every `start`. money wipes transactions >90d;

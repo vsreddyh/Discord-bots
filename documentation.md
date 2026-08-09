@@ -333,8 +333,9 @@ MongoDB (`mongo:7`).
 
 ### Bots
 
-- Built from `test/Dockerfile`: `python:3.11-slim` + `hermes-agent` +
-  `discord.py[voice]==2.7.1` + `pymongo`; the Dockerfile bakes in the same
+- Built from `test/Dockerfile`: `python:3.11-alpine` + `hermes-agent` +
+  `discord.py[voice]==2.7.1` + `pymongo` (Alpine keeps images ~40% smaller
+  than the old `slim` base); the Dockerfile bakes in the same
   `hermes-god` toolset patch. This is also the live stack's bot image.
 - `user: "1000:1000"`, `HOME=/hermes-home`; mounts `profiles/<bot>:/hermes-home`,
   `workspace/<bot>:/workspace`, `../tools:/tools` (**read-only**). Nothing else.

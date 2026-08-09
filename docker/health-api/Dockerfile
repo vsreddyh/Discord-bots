@@ -1,7 +1,6 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl sqlite3 && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl sqlite
 
 WORKDIR /app
 
