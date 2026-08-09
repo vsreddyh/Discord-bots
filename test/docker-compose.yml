@@ -130,5 +130,34 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # ── Dashboard (mirrors live stack) ──────────────────
+  dashboard:
+    build:
+      context: ../test
+    user: "1000:1000"
+    ports:
+      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
+    volumes:
+      - ../profiles/master:/hermes-home
+      - ../tools:/tools:ro
+    environment:
+      HERMES_MODE: dashboard
+      HERMES_HOME: /hermes-home
+      HOME: /hermes-home
+    restart: unless-stopped
+
+  # ── Retention one-shot (mirrors live stack) ─────────
+  retention:
+    build:
+      context: ../test
+    user: "1000:1000"
+    volumes:
+      - ../tools:/tools:ro
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DB: hermes
+    entrypoint: ["python3", "/tools/retention.py"]
+    restart: "no"
+
 volumes:
   mongo_data:
