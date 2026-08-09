@@ -115,8 +115,9 @@ lifecycle). `scripts/hermes.sh` is a thin wrapper around
    health-api URLs. If ufw is already active, adds idempotent allow-rules on
    `tailscale0` (+ SSH). Never auto-enables default-deny (lockout risk).
    Skip with `HERMES_NO_TAILSCALE=1`.
-3. Create `run/` + per-bot `workspace/<bot>`, and ensure `profiles/*/.env`
-   (copied from `.env.example` when missing — edit them!).
+3. Create `run/` + per-bot `workspace/<bot>`, and ensure the single root
+   `.env` exists (copied from `.env.example` when missing — edit it! All env
+   vars live there now; there are no per-profile `.env` files).
 4. Copy `skills/*` into each profile (existing skills are skipped).
 5. Install the **retention cron** (daily 03:00).
 
@@ -150,20 +151,22 @@ Each bot container starts via `test/entrypoint.sh`, which renders
 
 `docker compose down -v` (removes containers + the searxng volume), removes the
 retention cron, deletes `run/`, and wipes each profile's runtime state +
-rendered `config.yaml` + `.env`. Asks for confirmation. **Never touches remote
-MongoDB, committed files, or a host `~/.hermes` (there is none to manage).**
+rendered `config.yaml` + stale `profiles/*/.env` leftovers. Asks for
+confirmation. **Never touches remote MongoDB, committed files, or a host
+`~/.hermes` (there is none to manage).**
 
 ---
 
 ## Bot profiles
 
 `profiles/` holds a home directory per bot: the committed `config.yaml.template`,
-`SOUL.md`, skills, and the git-ignored rendered `config.yaml` + `.env` + runtime
-state (sessions, memories, kanban, cron, …).
+`SOUL.md`, skills, and the git-ignored rendered `config.yaml` + runtime state
+(sessions, memories, kanban, cron, …). No per-profile `.env` — all secrets live
+in the root `.env`.
 
 | Profile | Discord bot | Home channel | Purpose | Domain data |
 |---------|-------------|--------------|---------|-------------|
-| `master` | *(your coordinator)* | from `.env` | General coordinator, routes to domain bots | none |
+| `master` | *(your coordinator)* | `DISCORD_HOME_CHANNEL_MASTER` | General coordinator, routes to domain bots | none |
 | `story` | Portas-Mantainer | `1523762320986214541` | Story/worldbuilding from a lore vault | none |
 | `helldivers` | Rouge Automaton | `1535601629884317696` | Helldivers 2 companion (static wiki DB) | `helldivers_*` |
 | `money` | Miser | `1535611174039719976` | Money management | `money_transactions` |
@@ -183,13 +186,13 @@ Hermes actually reads, with docker defaults:
 All templates set `onboarding.profile_build: off` so the gateway never rewrites
 the tracked source of truth.
 
-### Per-profile `.env`
+### Env (single root `.env`)
 
-Secrets per bot (Discord token, home channel, optional overrides). Git-ignored;
-`.env.example` files are committed templates. The entrypoint sources
-`$HERMES_HOME/.env` at container start; the root `.env` is injected via
-`env_file` on each compose service, so shared secrets (Mongo URI, proxy keys)
-live in one place.
+All secrets live in the ONE git-ignored root `.env` (tracked `.env.example` is
+the template). compose maps each value into the services that need it via
+`environment:` interpolation — e.g. `DISCORD_BOT_TOKEN_MASTER` becomes the
+`DISCORD_BOT_TOKEN` env var inside the master container. The entrypoint no
+longer sources any profile `.env`; stale `profiles/*/.env` files are ignored.
 
 ---
 
@@ -268,7 +271,8 @@ Android Health Gateway app ──POST /api/health/sync──► health-api (:800
 - **Storage**: pymongo upserts/dedupes (see collections above).
 - **Idempotent**: repeated identical payloads never duplicate rows.
 - **Discord**: after each successful sync, best-effort summary post using
-  `DISCORD_BOT_TOKEN`/`DISCORD_HOME_CHANNEL` from `profiles/food/.env`.
+  `DISCORD_BOT_TOKEN`/`DISCORD_HOME_CHANNEL` injected by compose from the root
+  `.env` (`DISCORD_BOT_TOKEN_FOOD`/`DISCORD_HOME_CHANNEL_FOOD`).
 
 ### Android app
 
@@ -305,7 +309,7 @@ master profile's config, API keys, and sessions. It uses the prebuilt
 needed.
 
 A public bind **requires an auth provider**. This repo uses the built-in basic
-(username/password) provider, configured via env in `profiles/master/.env`:
+(username/password) provider, configured via env in the root `.env`:
 
 | Env var | Purpose |
 |---------|---------|
@@ -343,13 +347,15 @@ MongoDB (`mongo:7`).
 
 ### `entrypoint.sh`
 
-1. Sources `$HERMES_HOME/.env`.
-2. `chown-data` mode (run once via `docker compose run --rm <bot> chown-data`).
-3. Renders `config.yaml.template` → `config.yaml` with docker defaults
+1. `chown-data` mode (run once via `docker compose run --rm <bot> chown-data`).
+2. Renders `config.yaml.template` → `config.yaml` with docker defaults
    (`HERMES_BASE_URL=http://zen-proxy:4000/v1`, `HERMES_CWD=/workspace`,
    `MONGODB_URI=mongodb://mongodb:27017` unless overridden).
-4. `HERMES_MODE=dashboard` → `hermes dashboard --no-open --skip-build`;
+3. `HERMES_MODE=dashboard` → `hermes dashboard --no-open --skip-build`;
    otherwise `exec hermes gateway run --force --accept-hooks`.
+
+Env is injected entirely by compose from the root `.env` — no profile `.env`
+to source.
 
 The live stack adds the same image as a `dashboard` service
 (`HERMES_MODE=dashboard`, port 9119) and a `retention` service
@@ -373,15 +379,26 @@ docker compose -f test/docker-compose.yml up -d
 |-------------|-------------------|
 | `${HERMES_BASE_URL}` | `http://zen-proxy:4000/v1` |
 | `${HERMES_CWD}` | `/workspace` |
-| `${DISCORD_HOME_CHANNEL}` | from `profiles/<bot>/.env` |
+| `${DISCORD_HOME_CHANNEL}` | from the root `.env` (`DISCORD_HOME_CHANNEL_<BOT>`, mapped by compose) |
 | `MONGODB_URI` (env) | live: remote cluster (root `.env`); test: `mongodb://mongodb:27017` |
 
 ### Root `.env` variables
+
+The root `.env` is the **single source of truth** — every env var for the whole
+stack. compose maps them into each service; there are no per-profile `.env`
+files.
 
 | Var | Required | Purpose |
 |-----|----------|---------|
 | `OPENCODE_API_KEY` | **yes** | Zen backend auth |
 | `DEEPINFRA_API_KEY` | no | DeepInfra fallback auth |
+| `HERMES_API_KEY` | no (default `zen-proxy`) | bots' Authorization to zen-proxy |
+| `DISCORD_BOT_TOKEN_<BOT>` (`MASTER`/`STORY`/`HELLDIVERS`/`MONEY`/`FOOD`) | **yes** | one Discord token per bot |
+| `DISCORD_HOME_CHANNEL_<BOT>` | **yes** | one home channel per bot |
+| `DISCORD_ALLOW_ALL_USERS` / `DISCORD_ALLOWED_USERS` | no | channel access policy |
+| `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` / `_PASSWORD` / `_SECRET` | for dashboard | dashboard login + stable signing secret |
+| `HERMES_DASHBOARD_PORT` | no | dashboard bind port (default `9119`) |
+| `USDA_API_KEY` | for food | nutrition lookups |
 | `MONGODB_URI` | for money/food/helldivers | remote Mongo connection |
 | `MONGODB_DB` | no | default `hermes` |
 | `HEALTH_SYNC_TOKEN` | for health-api | Bearer token(s) for the Android app |
@@ -403,18 +420,18 @@ docker compose -f test/docker-compose.yml up -d
 
 ## Security
 
-- `.env` + `profiles/*/.env` hold live API keys, bot tokens, and Mongo creds.
-  Git-ignored; only `.env.example` files are tracked. Never commit either.
+- The root `.env` holds all live API keys, bot tokens, and Mongo creds.
+  Git-ignored; only `.env.example` is tracked. Never commit it.
 - `security.redact_secrets: true` in Hermes config.
 - searxng container drops all capabilities.
 - Dashboard binds `0.0.0.0:9119` behind username/password (basic auth).
 - `clean` never touches remote MongoDB.
 - Every container (bots + dashboard) only sees its own profile + workspace +
-  the **read-only** `/tools` mount — no sibling profiles, no root `.env`, no
-  Docker socket, no host paths. Bots still have normal outbound network
-  (Discord, remote Mongo, zen-proxy). `health-api` is the only service with the
-  root `.env` + `profiles/food/.env` (it needs the Mongo URI and the food
-  channel token).
+  the **read-only** `/tools` mount — no sibling profiles, no Docker socket, no
+  host paths. Only the specific env vars a service needs are injected via
+  compose (bots never see proxy keys). Bots still have normal outbound network
+  (Discord, remote Mongo, zen-proxy). `health-api` is the only service with
+  `env_file: ../.env` (it needs the Mongo URI) plus the food token/channel.
 - Test stack: the in-stack Mongo keeps test data off the remote cluster.
 
 ---

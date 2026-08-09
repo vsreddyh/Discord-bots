@@ -41,6 +41,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
     depends_on:
       zen-proxy:
         condition: service_healthy
@@ -56,6 +61,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_STORY:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_STORY:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
     depends_on:
       zen-proxy:
         condition: service_healthy
@@ -71,6 +81,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_HELLDIVERS:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_HELLDIVERS:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
     depends_on:
       zen-proxy:
         condition: service_healthy
@@ -86,6 +101,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MONEY:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MONEY:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
     depends_on:
       zen-proxy:
         condition: service_healthy
@@ -101,6 +121,12 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+      USDA_API_KEY: ${USDA_API_KEY:-}
     depends_on:
       zen-proxy:
         condition: service_healthy
@@ -113,12 +139,12 @@ services:
     user: "1000:1000"
     ports:
       - "8001:8000"
-    env_file:
-      - ../.env
-      - ../profiles/food/.env
+    env_file: ../.env
     environment:
       MONGODB_URI: mongodb://mongodb:27017
       MONGODB_DB: hermes
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
     depends_on:
       mongodb:
         condition: service_healthy
@@ -144,6 +170,14 @@ services:
       HERMES_MODE: dashboard
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
     restart: unless-stopped
 
   # ── Retention one-shot (mirrors live stack) ─────────

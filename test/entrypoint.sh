@@ -3,12 +3,8 @@ set -euo pipefail
 
 : "${HERMES_HOME:=/hermes-home}"
 
-if [[ -f "$HERMES_HOME/.env" ]]; then
-    set -a
-    # shellcheck disable=SC1091
-    source "$HERMES_HOME/.env"
-    set +a
-fi
+# NOTE: env is injected entirely by docker-compose (from the single root
+# .env). There is no per-profile .env to source anymore.
 
 if [[ "${1:-}" == "chown-data" ]]; then
     uid="${HERMES_UID:-1000}"

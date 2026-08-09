@@ -20,10 +20,11 @@ COMPOSE="$REPO/docker/docker-compose.yml"
 # Fall back to sudo docker when the current session predates docker-group
 # membership (fresh install / first run).
 docker_compose() {
+    # --env-file: interpolation reads the single root .env (same as hermes.sh).
     if docker info &>/dev/null 2>&1; then
-        docker compose "$@"
+        docker compose --env-file "$REPO/.env" "$@"
     else
-        sudo docker compose "$@"
+        sudo docker compose --env-file "$REPO/.env" "$@"
     fi
 }
 

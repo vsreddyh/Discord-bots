@@ -40,7 +40,8 @@ services:
 
   # ──────────────────────────────────────────────────────
   # Health Connect sync endpoint (Android app → MongoDB).
-  # Needs MONGODB_URI (root .env) + food's Discord token/channel.
+  # MONGODB_URI/HEALTH_SYNC_TOKEN from root .env; posts to Discord using
+  # the food bot's token/channel.
   # ──────────────────────────────────────────────────────
   health-api:
     build:
@@ -48,9 +49,10 @@ services:
     user: "1000:1000"
     ports:
       - "8001:8000"
-    env_file:
-      - ../.env
-      - ../profiles/food/.env
+    env_file: ../.env
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -65,9 +67,9 @@ services:
   # bakes in the hermes-god toolset. Each bot bind-mounts its own profile
   # (HERMES_HOME), workspace, and the shared /tools helper read-only.
   #
-  # Env comes from the bot's own profiles/<bot>/.env (sourced by entrypoint).
-  # Only MONGODB_URI/MONGODB_DB are injected from the root .env — deliberately
-  # NOT the whole root env (no proxy keys, and no host-oriented
+  # ALL env comes from the single root .env (compose interpolation), mapped
+  # per service — one Discord token/home channel per bot. Deliberately NOT
+  # the whole root env (no proxy keys, and no host-oriented
   # SEARXNG_URL=localhost:8888, which would break web search in-container).
   # ──────────────────────────────────────────────────────
   master:
@@ -81,6 +83,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       SEARXNG_URL: http://searxng:8080
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
@@ -100,6 +107,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_STORY:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_STORY:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       SEARXNG_URL: http://searxng:8080
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
@@ -119,6 +131,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_HELLDIVERS:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_HELLDIVERS:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       SEARXNG_URL: http://searxng:8080
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
@@ -138,6 +155,11 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MONEY:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MONEY:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       SEARXNG_URL: http://searxng:8080
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
@@ -157,6 +179,12 @@ services:
     environment:
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+      USDA_API_KEY: ${USDA_API_KEY:-}
       SEARXNG_URL: http://searxng:8080
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
@@ -167,9 +195,9 @@ services:
 
   # ──────────────────────────────────────────────────────
   # Dashboard — password-protected web UI for the master profile.
-  # Auth (HERMES_DASHBOARD_BASIC_AUTH_*) comes from profiles/master/.env,
-  # which entrypoint.sh sources. The package ships a prebuilt web_dist, so
-  # --skip-build works without Node/npm. No root .env needed.
+  # Auth (HERMES_DASHBOARD_BASIC_AUTH_*) comes from the root .env.
+  # The package ships a prebuilt web_dist, so --skip-build works without
+  # Node/npm.
   # ──────────────────────────────────────────────────────
   dashboard:
     build:
@@ -184,6 +212,14 @@ services:
       HERMES_MODE: dashboard
       HERMES_HOME: /hermes-home
       HOME: /hermes-home
+      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
+      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────

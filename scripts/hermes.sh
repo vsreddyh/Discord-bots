@@ -6,8 +6,9 @@ set -euo pipefail
 # Everything (searxng, zen-proxy, health-api, 5 bots, dashboard, retention)
 # runs as compose services in docker/docker-compose.yml. init self-installs the
 # host tools it needs (curl, docker + compose, python3, cron, Tailscale,
-# opencode), builds the images, seeds per-profile .env files, copies skills,
+# opencode), builds the images, seeds the single root .env, copies skills,
 # and installs the retention cron. Only git + sudo must pre-exist.
+# All env lives in the root .env (no per-profile .env files).
 # No host Hermes install, venvs, or native processes.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +29,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed per-bot .env + skills, set up Tailscale + host tools (opencode, python), install retention cron
+  init       Build images, seed the root .env (all env vars) + skills, set up Tailscale + host tools (opencode, python), install retention cron
   start      Start the whole Docker stack (searxng, proxy, bots, dashboard)
   stop       Stop the Docker stack
   restart    Stop then start
@@ -162,10 +163,13 @@ ensure_tailscale_firewall() {
 # Run docker compose, transparently falling back to sudo when the current
 # session predates docker-group membership (fresh install / first run).
 docker_compose() {
+    # --env-file: interpolation reads the single root .env. Without it, compose
+    # looks for .env in the compose file's dir (docker/ or test/) and every
+    # ${VAR} (tokens, MONGODB_URI, ...) silently falls back to empty/default.
     if docker info &>/dev/null 2>&1; then
-        docker compose "$@"
+        docker compose --env-file "$REPO/.env" "$@"
     else
-        sudo docker compose "$@"
+        sudo docker compose --env-file "$REPO/.env" "$@"
     fi
 }
 
@@ -273,9 +277,9 @@ cmd_init() {
     if [[ ! -f "$REPO/.env" ]]; then
         if [[ -f "$REPO/.env.example" ]]; then
             cp "$REPO/.env.example" "$REPO/.env"
-            warn "root .env created from .env.example — EDIT IT (API keys, Mongo URI)."
+            warn "root .env created from .env.example — EDIT IT (all tokens, API keys, Mongo URI)."
         else
-            warn "root .env missing and no .env.example exists — create it (zen-proxy/health-api need it)."
+            warn "root .env missing and no .env.example exists — create it (the whole stack needs it)."
         fi
     fi
     load_root_env
@@ -295,14 +299,6 @@ cmd_init() {
     local b
     for b in "${BOTS[@]}"; do
         mkdir -p "$REPO/profiles/$b" "$REPO/workspace/$b"
-        if [[ ! -f "$REPO/profiles/$b/.env" ]]; then
-            if [[ -f "$REPO/profiles/$b/.env.example" ]]; then
-                cp "$REPO/profiles/$b/.env.example" "$REPO/profiles/$b/.env"
-                warn "profiles/$b/.env created from example — EDIT IT (tokens, channel IDs)."
-            else
-                warn "profiles/$b/.env missing and no example exists — create it."
-            fi
-        fi
     done
 
     info "Installing project skills into each profile..."
@@ -324,7 +320,7 @@ cmd_init() {
 
     echo
     info "Initialization complete."
-    echo "  Next: edit profiles/*/.env with real tokens, then ./scripts/hermes.sh start"
+    echo "  Next: edit .env with real tokens (DISCORD_BOT_TOKEN_*, Mongo URI), then ./scripts/hermes.sh start"
     local _tip
     _tip="$(_tailscale_ip)"
     if [[ -n "$_tip" ]]; then
@@ -414,7 +410,8 @@ cmd_status() {
 cmd_clean() {
     echo -e "${RED}This wipes:${NC}"
     echo "  - all profiles/* transient runtime state (sessions, logs, DBs, rendered config)"
-    echo "  - profiles/*/.env (secrets) and the retention cron entry"
+    echo "  - stale profiles/*/.env files (obsolete — secrets now live in root .env)"
+    echo "  - the retention cron entry"
     echo "  - Docker volumes (searxng data) and containers"
     echo -e "${RED}Remote MongoDB is NOT touched. Committed files (skills, memories,"
     echo -e "SOUL.md, templates) are KEPT. Committed files are NOT touched.${NC}"

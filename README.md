@@ -64,17 +64,13 @@ retention ──► one-shot `docker compose run --rm retention` (cron 03:00)
 # 1. Set up API keys
 cp .env.example .env && nano .env
 
-# 2. Build images, seed per-bot .env, set up Tailscale, install retention cron
+# 2. Build images, set up Tailscale, install retention cron
 ./scripts/hermes.sh init
 
-# 3. Per-bot secrets (5 files — each is git-ignored)
-#    Edit every profiles/*/.env created from .env.example:
-#    Discord token + home channel, dashboard password.
-nano profiles/master/.env
-nano profiles/story/.env
-nano profiles/helldivers/.env
-nano profiles/money/.env
-nano profiles/food/.env
+# 3. All secrets live in the ONE root .env (git-ignored) — edit it:
+#    per-bot Discord tokens/channels (DISCORD_BOT_TOKEN_<BOT>, ...), Mongo
+#    URI, dashboard password. No per-profile .env files exist anymore.
+nano .env
 
 # 4. Start everything
 ./scripts/hermes.sh start
@@ -87,18 +83,18 @@ nano profiles/food/.env
 ```
 
 Dashboard: `http://<host>:9119` — log in with the username/password set in
-`profiles/master/.env`.
+the root `.env` (`HERMES_DASHBOARD_BASIC_AUTH_USERNAME`/`_PASSWORD`).
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `./scripts/hermes.sh init` | Self-install host deps (curl, docker + compose, python3, cron, Tailscale, opencode CLI), build images, ensure `profiles/*/.env` (+ copies skills), install retention cron. Skip opencode with `HERMES_NO_OPENCODE=1`, skip Tailscale with `HERMES_NO_TAILSCALE=1`. Only git + sudo must already exist. |
+| `./scripts/hermes.sh init` | Self-install host deps (curl, docker + compose, python3, cron, Tailscale, opencode CLI), build images, seed the single root `.env` (+ copies skills), install retention cron. Skip opencode with `HERMES_NO_OPENCODE=1`, skip Tailscale with `HERMES_NO_TAILSCALE=1`. Only git + sudo must already exist. |
 | `./scripts/hermes.sh start` | `docker compose up -d --build`, then run retention once |
 | `./scripts/hermes.sh stop` | `docker compose down` (keeps volumes) |
 | `./scripts/hermes.sh restart` | Stop then start |
 | `./scripts/hermes.sh status` | `docker compose ps` |
-| `./scripts/hermes.sh clean` | **Destructive.** Down `-v`, wipe `run/`, profile runtime + rendered config + `.env`, retention cron. Remote MongoDB untouched. |
+| `./scripts/hermes.sh clean` | **Destructive.** Down `-v`, wipe `run/`, profile runtime + rendered config + stale `profiles/*/.env`, retention cron. Remote MongoDB untouched. |
 
 Direct docker access for a single service:
 
@@ -188,9 +184,10 @@ Each bot container sees **only**:
 
 No sibling profiles, no root `.env`, no Docker socket, no host paths. Bots have
 normal outbound network (Discord, remote Mongo, zen-proxy) but never hold
-another bot's token or the host filesystem. `health-api` is the only service
-that reads the root `.env` + `profiles/food/.env` (it needs `MONGODB_URI` and
-the food channel token to post summaries).
+another bot's token or the host filesystem. `health-api` reads the root `.env`
+(it needs `MONGODB_URI`) plus the food bot's token/channel, injected via
+compose from `DISCORD_BOT_TOKEN_FOOD`/`DISCORD_HOME_CHANNEL_FOOD`, to post
+summaries.
 
 ## Skills
 
@@ -213,7 +210,7 @@ session/log/state files are git-ignored. Channel bindings live in each
 ├── test/                    # isolated mirror: 5 bots + proxy + health-api + in-stack mongodb
 │   ├── Dockerfile           # shared bot image (bakes in hermes-god)
 │   └── entrypoint.sh        # renders config.yaml, runs gateway (or dashboard via HERMES_MODE)
-├── profiles/                # 5 bot homes; config.yaml.template + .env + SOUL.md + skills
+├── profiles/                # 5 bot homes; config.yaml.template + SOUL.md + skills (no .env — see root .env)
 ├── workspace/               # per-bot terminal cwd (git-ignored)
 ├── run/                     # retention log (git-ignored)
 ├── tools/                   # mongo.py (shared helper) + retention.py (data lifecycle)
@@ -226,7 +223,7 @@ session/log/state files are git-ignored. Channel bindings live in each
 
 - **Proxy unreachable** — `curl localhost:4000/health`; `docker compose -f docker/docker-compose.yml logs zen-proxy`; confirm `OPENCODE_API_KEY` in `.env`.
 - **Bot won't start** — `docker compose -f docker/docker-compose.yml logs <bot>`; re-run `./scripts/hermes.sh init` to rebuild the image.
-- **Dashboard auth loop** — set `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`/`_PASSWORD` (and a stable `_SECRET`) in `profiles/master/.env`.
+- **Dashboard auth loop** — set `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`/`_PASSWORD` (and a stable `_SECRET`) in the root `.env`.
 - **Mongo connection refused** — `docker compose -f docker/docker-compose.yml exec money python3 /tools/mongo.py count money_transactions`; verify `MONGODB_URI` in root `.env`.
 - **Retention not running** — `crontab -l | grep retention`; re-run `init`.
 - **Health API unreachable** — `curl localhost:8001/health` from the VPS, then `curl http://<tailnet-ip>:8001/health` from the phone (see "Access (Tailscale)" below); check `tailscale status` on both devices.
@@ -266,9 +263,9 @@ on `tailscale0` when ufw is already active):
    sudo ufw enable
    ```
    The dashboard (:9119) and health-api (:8001) stay published on `0.0.0.0`
-   inside Docker, but only the tailnet can reach them. Strong
-   `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`/`_SECRET` in `profiles/master/.env`
-   is still required.
+    inside Docker, but only the tailnet can reach them. Strong
+    `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`/`_SECRET` in the root `.env` is
+    still required.
 3. **On the phone**: install Tailscale, log into the same tailnet, and set the
    health-gateway URL to `http://<vps-tailnet-ip>:8001`.
 
@@ -279,7 +276,7 @@ already covers it if you connect via the tailnet IP.
 
 ## Security
 
-- `.env` and `profiles/*/.env` hold live keys/tokens/Mongo creds — git-ignored, never commit. Only `.env.example` files are tracked.
+- The root `.env` holds all live keys/tokens/Mongo creds — git-ignored, never commit. Only `.env.example` is tracked.
 - Dashboard binds `0.0.0.0:9119` and requires username/password (basic auth provider) — the only thing protecting it on the public IP; use a strong password.
 - `:9119` (dashboard) and `:8001` (health-api) are exposed publicly; everything else is internal to the compose network.
 - `security.redact_secrets: true` in Hermes config.
