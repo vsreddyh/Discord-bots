@@ -8,6 +8,9 @@ bots just stream text. Bots are I/O-bound (they wait on Discord + the network), 
 stay modest. No GPU needed.
 
 Concurrency tiers = number of Hermes agents running at the same time.
+Always **single user per agent** — each bot serves one user, so an agent run is one
+bounded conversation (never multi-user sessions in one bot). The tiers above are pure
+"how many bots are being used right now", and the max is 5 single-user sessions.
 
 | Tier | RAM | CPU | Disk | Network |
 |---|---|---|---|---|
