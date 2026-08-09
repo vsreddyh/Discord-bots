@@ -26,7 +26,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed per-bot .env + skills, set up Tailscale, install retention cron
+  init       Build images, seed per-bot .env + skills, set up Tailscale + host tools (opencode, python), install retention cron
   start      Start the whole Docker stack (searxng, proxy, bots, dashboard)
   stop       Stop the Docker stack
   restart    Stop then start
@@ -155,6 +155,39 @@ ensure_tailscale_firewall() {
 }
 
 # ────────────────────────────────────────────────────────────
+# HOST TOOLS (opencode CLI, python)
+# ────────────────────────────────────────────────────────────
+ensure_python() {
+    if command -v python3 &>/dev/null &&
+        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+        info "python3 $(python3 --version 2>&1 | sed 's/Python //') available."
+        return 0
+    fi
+    warn "python3 >= 3.9 not found — installing python3 + pip (host tooling)."
+    sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv 2>&1 | sed 's/^/  /' \
+        || { warn "python install failed — install python3 manually."; return 1; }
+    info "python3 installed: $(python3 --version 2>&1)."
+}
+
+ensure_opencode() {
+    [[ "${HERMES_NO_OPENCODE:-0}" == "1" ]] && { info "opencode install skipped (HERMES_NO_OPENCODE=1)."; return 0; }
+    if command -v opencode &>/dev/null; then
+        info "opencode already installed ($(opencode --version 2>/dev/null || echo '?'))."
+        return 0
+    fi
+    info "Installing opencode CLI..."
+    if ! curl -fsSL https://opencode.ai/install | bash; then
+        warn "opencode install failed — install manually: https://opencode.ai/docs/install"
+        return 1
+    fi
+    if ! command -v opencode &>/dev/null; then
+        warn "opencode installed but not on PATH — restart the shell or source ~/.bashrc, then re-run init."
+        return 1
+    fi
+    info "opencode installed: $(opencode --version 2>/dev/null)."
+}
+
+# ────────────────────────────────────────────────────────────
 # INIT
 # ────────────────────────────────────────────────────────────
 cmd_init() {
@@ -166,6 +199,8 @@ cmd_init() {
 
     ensure_tailscale || true
     ensure_tailscale_firewall || true
+    ensure_python || true
+    ensure_opencode || true
 
     local b
     for b in "${BOTS[@]}"; do

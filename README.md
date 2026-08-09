@@ -93,7 +93,7 @@ Dashboard: `http://<host>:9119` — log in with the username/password set in
 
 | Command | Description |
 |---------|-------------|
-| `./scripts/hermes.sh init` | Build images, set up Tailscale, ensure `profiles/*/.env` (+ copies skills), install retention cron |
+| `./scripts/hermes.sh init` | Build images, set up Tailscale, install host tools (opencode CLI + python3, skip opencode with `HERMES_NO_OPENCODE=1`), ensure `profiles/*/.env` (+ copies skills), install retention cron |
 | `./scripts/hermes.sh start` | `docker compose up -d --build`, then run retention once |
 | `./scripts/hermes.sh stop` | `docker compose down` (keeps volumes) |
 | `./scripts/hermes.sh restart` | Stop then start |
