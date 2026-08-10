@@ -15,14 +15,16 @@
 
 ## What this project is
 
-Runs **five Hermes bots** (1 master coordinator + 4 domain bots) against a
+Runs **six Hermes bots** (1 master coordinator + 5 domain bots) against a
 credit-aware LLM proxy: **OpenCode Zen** primary, **DeepInfra** fallback on
 credit/payment errors. Private SearXNG, one Discord gateway per bot, a
 password-protected dashboard, and remote MongoDB for domain data (money, food,
 helldivers). **The live stack is fully Dockerized** — one compose file
-(`docker/docker-compose.yml`): searxng + zen-proxy + health-api + 5 bots +
-dashboard + a one-shot retention job. The `test/` stack is an isolated mirror
-with an in-stack MongoDB. No host Hermes install, no native processes.
+(`docker/docker-compose.yml`): searxng + zen-proxy + health-api + 6 bots +
+dashboard + a one-shot retention job. Development runs the SAME single compose
+file; `HERMES_ENV=dev` in the root `.env` points every data consumer at a
+separate `test_`-prefixed DB on the same remote cluster (`hermes` → `test_hermes`).
+No host Hermes install, no native processes.
 
 ```
 master ─┐
@@ -30,6 +32,7 @@ story ──┤ docker containers (HERMES_HOME=/hermes-home)
 helldivers ├─► zen-proxy (:4000)  ── primary: OpenCode Zen ──► DeepInfra fallback
 money ──┤    searxng (:8888)  •  health-api (:8001)  •  dashboard (:9119, password)
 food ───┘    MongoDB (remote; money/food/helldivers)  •  retention (one-shot container)
+resumes ──┤  Resumes repo clone (workspace/resumes)
 ```
 
 ## Repo facts
@@ -56,11 +59,14 @@ food ───┘    MongoDB (remote; money/food/helldivers)  •  retention (on
   food prunes date rows >30d (never `food_weight`); helldivers (static) and story
   (no DB) are no-ops.
 - `tools/mongo.py` = shared pymongo CLI; `tools/retention.py` = data lifecycle.
-  `MONGODB_URI`/`MONGODB_DB` in root `.env`.
-- Docker: `docker/docker-compose.yml` = FULL live stack (searxng + zen-proxy +
-  health-api + 5 bots + dashboard + retention); `test/` = isolated mirror with an
-  in-stack `mongodb` (never touches remote cluster). Both share the bot image
-  built from `test/Dockerfile` + `test/entrypoint.sh` (bakes in `hermes-god`).
+  `MONGODB_URI`/`MONGODB_DB` in root `.env`. `HERMES_ENV=dev` prefixes the DB
+  name (`test_hermes`); `scripts/lib/common.sh` derives `MONGODB_DB_PREFIX=test_`.
+- Docker: `docker/docker-compose.yml` = the whole stack (searxng + zen-proxy +
+  health-api + 6 bots + dashboard + retention) — the ONLY compose file. Dev and
+  prod run the same file; `HERMES_ENV=dev` keeps dev writes on a `test_`-prefixed
+  DB, never the prod DB. The bot image is built from `test/Dockerfile` +
+  `test/entrypoint.sh` (bakes in `hermes-god`); those are the image source, not
+  a mirror stack.
   Per-bot tokens/channels are injected via compose `environment:` interpolation
   from the root `.env`; `docker_compose()` always passes `--env-file "$REPO/.env"`
   (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
@@ -112,5 +118,9 @@ food ───┘    MongoDB (remote; money/food/helldivers)  •  retention (on
   dashboard / proxy / health-api before `./scripts/hermes.sh start`, or two
   gateways will fight over the same Discord tokens.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
+- Dev isolation = `HERMES_ENV=dev` in the root `.env` (prefixes DB: `test_hermes`)
+  for bots, health-api, and retention. prod (or unset) = DB as-is. Keep
+  `HERMES_ENV=dev` on dev machines — dropping it silently points dev at the prod
+  DB. Dev machines run the same single compose file.
 - Shared sessions = one running-agent slot per channel (messages interrupt/
   queue), shared token costs.

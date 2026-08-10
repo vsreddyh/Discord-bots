@@ -12,7 +12,7 @@ Deep dive into every part of `opencode-remote`. For the 2-minute overview, see [
 6. [Data retention](#data-retention)
 7. [Health Connect pipeline](#health-connect-pipeline)
 8. [Hermes dashboard](#hermes-dashboard)
-9. [Test stack (Docker)](#test-stack-docker)
+9. [Development mode](#development-mode)
 10. [Configuration reference](#configuration-reference)
 11. [Security](#security)
 12. [Extending the stack](#extending-the-stack)
@@ -21,10 +21,12 @@ Deep dive into every part of `opencode-remote`. For the 2-minute overview, see [
 
 ## System overview
 
-The repo runs **five Hermes bots**, an LLM proxy, a health sync endpoint, a
-dashboard, and a retention job — **all in Docker**. The live stack is one
-compose file (`docker/docker-compose.yml`); the `test/` stack is an isolated
-mirror with an in-stack MongoDB. There is no host Hermes install.
+The repo runs **six Hermes bots**, an LLM proxy, a health sync endpoint, a
+dashboard, and a retention job — **all in Docker**. The whole stack is one
+compose file (`docker/docker-compose.yml`); dev and prod run the same file.
+Dev isolation is `HERMES_ENV=dev` in the root `.env`, which prefixes the DB
+name (`test_hermes`) so dev writes never touch the prod DB. There is no host
+Hermes install.
 
 ```
                     remote MongoDB
@@ -42,18 +44,20 @@ retention ──► one-shot container (cron 03:00)
 
 - **zen-proxy** — OpenAI-compatible LLM proxy (`docker/proxy/main.py`), a container on `:4000`.
 - **health-api** — Health Connect sync endpoint (`docker/health-api/main.py`), a container on `:8001`, writing to MongoDB.
-- **bots** — five `hermes gateway run` containers, one `HERMES_HOME` each, bind-mounted from `profiles/`.
-- **dashboard** — a container running `hermes dashboard` against the master profile (`HERMES_MODE=dashboard`).
+- **bots** — one multiplexed `hermes gateway run` container serving all five profiles (`gateway.multiplex_profiles: true`). `master` is the default profile home; story/helldivers/money/food are named profiles nested under `profiles/master/profiles/`, each with its own Discord token, workspace, and per-profile secret scope.
+- **dashboard** — a container running `hermes dashboard` against the default profile (`HERMES_MODE=dashboard`); unified mode lists every named profile under `HERMES_HOME/profiles/`.
 - **searxng** — private web search for `web.search_backend: searxng`.
 - **retention** — one-shot service (`tools/retention.py`) run by cron.
-- **test stack** — the whole five-bot setup plus proxy, health-api, and an in-stack MongoDB, all in Docker.
+- **dev mode** — `HERMES_ENV=dev` in the root `.env` runs the same single
+  compose file with `MONGODB_DB` prefixed (`test_hermes`) for bots, health-api,
+  and retention. prod/unset = the DB as-is.
 
 ---
 
 ## The Zen proxy
 
 Source: `docker/proxy/main.py` — a ~180-line FastAPI app. Runs as a container on
-`:4000` in both the live stack and the test stack. Same code either way.
+`:4000` in both dev and prod — same code either way.
 
 ### Backends
 
@@ -127,16 +131,21 @@ config/skills and re-installs the cron.
 ### `start` (order)
 
 1. `docker compose -f docker/docker-compose.yml up -d --build` — starts
-   searxng, zen-proxy, health-api, all five bots, and the dashboard. Bots wait
-   on `zen-proxy` via `depends_on: service_healthy`.
+   searxng, zen-proxy, health-api, the **one multiplexed bot gateway**, and the
+   dashboard. The gateway waits on `zen-proxy` via `depends_on: service_healthy`.
 2. First, `start` best-effort kills any **stale native bot PIDs** left in
    `run/bots/*.pid` by the pre-Docker launcher (they would fight over the same
-   Discord tokens).
+   Discord tokens). Stale pre-multiplex bot containers (one per profile) must
+   also be gone before the new single gateway starts, or two gateways will fight
+   over the same tokens.
 3. retention: `scripts/retention.sh run` runs the one-shot `retention` service.
 
-Each bot container starts via `test/entrypoint.sh`, which renders
-`config.yaml.template` → `config.yaml` (`HERMES_BASE_URL=http://zen-proxy:4000/v1`,
-`HERMES_CWD=/workspace`) and runs `hermes gateway run --force --accept-hooks`.
+The gateway container starts via `test/entrypoint.sh`, which renders
+`config.yaml.template` → `config.yaml` **for the default (master) profile and
+each named profile** (`HERMES_BASE_URL=http://zen-proxy:4000/v1`,
+`HERMES_CWD=/workspace/<profile>`), writes each profile's `.env`
+(`DISCORD_BOT_TOKEN` / `DISCORD_HOME_CHANNEL` from the `<BOT>`-suffixed env
+compose maps in), and runs `hermes gateway run --force --accept-hooks`.
 
 ### `stop` (reverse)
 
@@ -151,7 +160,7 @@ Each bot container starts via `test/entrypoint.sh`, which renders
 
 `docker compose down -v` (removes containers + the searxng volume), removes the
 retention cron, deletes `run/`, and wipes each profile's runtime state +
-rendered `config.yaml` + stale `profiles/*/.env` leftovers. Asks for
+rendered `config.yaml` + per-profile `.env` files. Asks for
 confirmation. **Never touches remote MongoDB, committed files, or a host
 `~/.hermes` (there is none to manage).**
 
@@ -159,10 +168,15 @@ confirmation. **Never touches remote MongoDB, committed files, or a host
 
 ## Bot profiles
 
-`profiles/` holds a home directory per bot: the committed `config.yaml.template`,
-`SOUL.md`, skills, and the git-ignored rendered `config.yaml` + runtime state
-(sessions, memories, kanban, cron, …). No per-profile `.env` — all secrets live
-in the root `.env`.
+`profiles/master/` is the **default profile home**: the committed
+`config.yaml.template`, `SOUL.md`, skills, and the git-ignored rendered
+`config.yaml` + runtime state (sessions, memories, kanban, cron, …). The other
+five bots are **named profiles** nested under it at
+`profiles/master/profiles/<bot>/` — the multiplexed gateway serves them all from
+the ONE container. Every profile writes its own `.env`
+(`DISCORD_BOT_TOKEN` / `DISCORD_HOME_CHANNEL`) via the entrypoint at container
+start; the secrets themselves live in the root `.env` as
+`DISCORD_BOT_TOKEN_<BOT>` / `DISCORD_HOME_CHANNEL_<BOT>`.
 
 | Profile | Discord bot | Home channel | Purpose | Domain data |
 |---------|-------------|--------------|---------|-------------|
@@ -171,6 +185,7 @@ in the root `.env`.
 | `helldivers` | Rouge Automaton | `1535601629884317696` | Helldivers 2 companion (static wiki DB) | `helldivers_*` |
 | `money` | Miser | `1535611174039719976` | Money management | `money_transactions` |
 | `food` | Caped Baldy (Saitama) | `1535613331610669117` | Food + workouts, Health Connect sync | `food_*` |
+| `resumes` | Job Bot | `1536259587152543825` | Tailored resumes + cover letters from the Resumes repo clone | none |
 
 Design plans: `profile-plans/*.md`.
 
@@ -178,10 +193,10 @@ Design plans: `profile-plans/*.md`.
 
 Each `config.yaml.template` is a template with `${HERMES_BASE_URL}`,
 `${HERMES_CWD}` (and `${DISCORD_HOME_CHANNEL}` on master). The container
-entrypoint (`test/entrypoint.sh`) renders it to the git-ignored `config.yaml`
-Hermes actually reads, with docker defaults:
+entrypoint (`test/entrypoint.sh`) renders each profile's template to the
+git-ignored `config.yaml` Hermes actually reads, with docker defaults:
 
-- live + test stacks: `http://zen-proxy:4000/v1`, `/workspace`
+- both dev + prod: `http://zen-proxy:4000/v1`, `/workspace/<profile>`
 
 All templates set `onboarding.profile_build: off` so the gateway never rewrites
 the tracked source of truth.
@@ -190,9 +205,11 @@ the tracked source of truth.
 
 All secrets live in the ONE git-ignored root `.env` (tracked `.env.example` is
 the template). compose maps each value into the services that need it via
-`environment:` interpolation — e.g. `DISCORD_BOT_TOKEN_MASTER` becomes the
-`DISCORD_BOT_TOKEN` env var inside the master container. The entrypoint no
-longer sources any profile `.env`; stale `profiles/*/.env` files are ignored.
+`environment:` interpolation — e.g. `DISCORD_BOT_TOKEN_MASTER` /
+`DISCORD_HOME_CHANNEL_MASTER` reach the gateway container, and the entrypoint
+splits them into each profile's `.env` as bare `DISCORD_BOT_TOKEN` /
+`DISCORD_HOME_CHANNEL` (read via Hermes' per-profile secret scope — never merged
+into one global env).
 
 ---
 
@@ -304,9 +321,10 @@ then hourly via WorkManager (rescheduled on boot). Auth token matches
 One dashboard container, bound to `0.0.0.0:9119`, running
 `hermes dashboard` with `HERMES_MODE=dashboard` (`test/entrypoint.sh`) and
 `HERMES_HOME=/hermes-home` (bind-mounted `profiles/master`) — so it manages the
-master profile's config, API keys, and sessions. It uses the prebuilt
-`hermes_cli/web_dist` shipped in the package (`--skip-build`), so no Node/npm is
-needed.
+default profile AND every named profile: the unified dashboard lists all six
+bots (master + story/helldivers/money/food/resumes) with their own config, API keys,
+sessions, and gateway state. It uses the prebuilt `hermes_cli/web_dist` shipped
+in the package (`--skip-build`), so no Node/npm is needed.
 
 A public bind **requires an auth provider**. This repo uses the built-in basic
 (username/password) provider, configured via env in the root `.env`:
@@ -322,51 +340,54 @@ Env wins over config.yaml. Override the bind with `HERMES_DASHBOARD_HOST`
 
 ---
 
-## Test stack (Docker)
+## Development mode
 
-`test/docker-compose.yml` + `test/Dockerfile` + `test/entrypoint.sh`. Runs the
-same five profiles against the same proxy, fully isolated, with an in-stack
-MongoDB (`mongo:7`).
+One compose file for dev and prod (`docker/docker-compose.yml`). Set
+`HERMES_ENV=dev` in the root `.env` and every data consumer writes to
+`test_hermes` on the remote cluster instead of `hermes`. Dev and prod never
+share a DB.
 
-| Service | Role |
-|---------|------|
-| `zen-proxy` | LLM proxy (same code as live) |
-| `mongodb` | in-stack Mongo; bots/health-api point here, never the remote cluster |
-| `master` / `story` / `helldivers` / `money` / `food` | one Hermes Discord bot each |
-| `health-api` | Health Connect sync endpoint (writes in-stack Mongo) |
+| Consumer | prod DB | dev DB |
+|----------|---------|--------|
+| `gateway` (money/food/helldivers) | `hermes` | `test_hermes` |
+| `health-api` | `hermes` | `test_hermes` |
+| `retention` | `hermes` | `test_hermes` |
 
-### Bots
+### Bot image (`test/Dockerfile`)
 
-- Built from `test/Dockerfile`: `python:3.11-alpine` + `hermes-agent` +
+- `python:3.11-alpine` + `hermes-agent` +
   `discord.py[voice]==2.7.1` + `pymongo` (Alpine keeps images ~40% smaller
   than the old `slim` base); the Dockerfile bakes in the same
-  `hermes-god` toolset patch. This is also the live stack's bot image.
-- `user: "1000:1000"`, `HOME=/hermes-home`; mounts `profiles/<bot>:/hermes-home`,
-  `workspace/<bot>:/workspace`, `../tools:/tools` (**read-only**). Nothing else.
+  `hermes-god` toolset patch. This is the bot image for the whole stack.
+- `user: "1000:1000"`, `HOME=/hermes-home`; mounts
+  `profiles/master:/hermes-home`, `workspace:/workspace`, `../tools:/tools`
+  (**read-only**). The default profile is `master`; the other five bots are
+  named profiles under `$HERMES_HOME/profiles/`.
 - `depends_on: zen-proxy (service_healthy)`.
 
 ### `entrypoint.sh`
 
-1. `chown-data` mode (run once via `docker compose run --rm <bot> chown-data`).
-2. Renders `config.yaml.template` → `config.yaml` with docker defaults
-   (`HERMES_BASE_URL=http://zen-proxy:4000/v1`, `HERMES_CWD=/workspace`,
-   `MONGODB_URI=mongodb://mongodb:27017` unless overridden).
+1. `chown-data` mode (run once via `docker compose run --rm gateway chown-data`).
+2. Renders `config.yaml.template` → `config.yaml` for the default profile AND
+   each named profile, with docker defaults
+   (`HERMES_BASE_URL=http://zen-proxy:4000/v1`, `HERMES_CWD=/workspace/<name>`,
+   `MONGODB_DB=hermes` unless overridden by compose), and writes each
+   profile's `.env` (`DISCORD_BOT_TOKEN` / `DISCORD_HOME_CHANNEL`).
 3. `HERMES_MODE=dashboard` → `hermes dashboard --no-open --skip-build`;
    otherwise `exec hermes gateway run --force --accept-hooks`.
 
 Env is injected entirely by compose from the root `.env` — no profile `.env`
 to source.
 
-The live stack adds the same image as a `dashboard` service
+The stack adds the same image as a `dashboard` service
 (`HERMES_MODE=dashboard`, port 9119) and a `retention` service
 (`entrypoint: ["python3", "/tools/retention.py"]`).
 
 ### Starting it
 
 ```bash
-docker compose -f test/docker-compose.yml build
-docker compose -f test/docker-compose.yml run --rm story chown-data   # once
-docker compose -f test/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up -d --build
+docker compose -f docker/docker-compose.yml run --rm gateway chown-data   # once, as the mount owner
 ```
 
 ---
@@ -375,12 +396,12 @@ docker compose -f test/docker-compose.yml up -d
 
 ### Template placeholders
 
-| Placeholder | Live + test stack |
-|-------------|-------------------|
+| Placeholder | Value |
+|-------------|-------|
 | `${HERMES_BASE_URL}` | `http://zen-proxy:4000/v1` |
 | `${HERMES_CWD}` | `/workspace` |
 | `${DISCORD_HOME_CHANNEL}` | from the root `.env` (`DISCORD_HOME_CHANNEL_<BOT>`, mapped by compose) |
-| `MONGODB_URI` (env) | live: remote cluster (root `.env`); test: `mongodb://mongodb:27017` |
+| `MONGODB_DB` (env) | `hermes` (prod) or `test_hermes` (with `HERMES_ENV=dev`) |
 
 ### Root `.env` variables
 
@@ -393,14 +414,15 @@ files.
 | `OPENCODE_API_KEY` | **yes** | Zen backend auth |
 | `DEEPINFRA_API_KEY` | no | DeepInfra fallback auth |
 | `HERMES_API_KEY` | no (default `zen-proxy`) | bots' Authorization to zen-proxy |
-| `DISCORD_BOT_TOKEN_<BOT>` (`MASTER`/`STORY`/`HELLDIVERS`/`MONEY`/`FOOD`) | **yes** | one Discord token per bot |
+| `DISCORD_BOT_TOKEN_<BOT>` (`MASTER`/`STORY`/`HELLDIVERS`/`MONEY`/`FOOD`/`RESUMES`) | **yes** | one Discord token per bot |
 | `DISCORD_HOME_CHANNEL_<BOT>` | **yes** | one home channel per bot |
+| `HERMES_ENV` | no | `dev` → `test_` prefix on `MONGODB_DB`; prod/unset = as-is |
 | `DISCORD_ALLOW_ALL_USERS` / `DISCORD_ALLOWED_USERS` | no | channel access policy |
 | `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` / `_PASSWORD` / `_SECRET` | for dashboard | dashboard login + stable signing secret |
 | `HERMES_DASHBOARD_PORT` | no | dashboard bind port (default `9119`) |
 | `USDA_API_KEY` | for food | nutrition lookups |
 | `MONGODB_URI` | for money/food/helldivers | remote Mongo connection |
-| `MONGODB_DB` | no | default `hermes` |
+| `MONGODB_DB` | no | DB name for domain data (default `hermes`; `test_hermes` under `HERMES_ENV=dev`) |
 | `HEALTH_SYNC_TOKEN` | for health-api | Bearer token(s) for the Android app |
 | `SEARXNG_URL` / `SEARXNG_SECRET_KEY` / `SEARXNG_PORT` / `SEARXNG_HOSTNAME` | no | searxng settings |
 
@@ -426,13 +448,16 @@ files.
 - searxng container drops all capabilities.
 - Dashboard binds `0.0.0.0:9119` behind username/password (basic auth).
 - `clean` never touches remote MongoDB.
-- Every container (bots + dashboard) only sees its own profile + workspace +
-  the **read-only** `/tools` mount — no sibling profiles, no Docker socket, no
-  host paths. Only the specific env vars a service needs are injected via
-  compose (bots never see proxy keys). Bots still have normal outbound network
-  (Discord, remote Mongo, zen-proxy). `health-api` is the only service with
+- Every container only sees the profiles + workspace it needs:
+  `profiles/master:/hermes-home` (default + named profiles), `workspace:/workspace`,
+  the **read-only** `/tools` mount — no Docker socket, no host paths. Only the
+  specific env vars a service needs are injected via compose (bots never see
+  proxy keys). Bots still have normal outbound network (Discord, remote Mongo,
+  zen-proxy). `health-api` is the only service with
   `env_file: ../.env` (it needs the Mongo URI) plus the food token/channel.
-- Test stack: the in-stack Mongo keeps test data off the remote cluster.
+- Dev isolation: `HERMES_ENV=dev` points every data consumer at a
+  `test_`-prefixed DB on the remote cluster (`test_hermes`) — dev runs never
+  write the prod DB.
 
 ---
 
@@ -442,17 +467,28 @@ files.
 
 1. Add the mapping to `MODEL_MAP` in `docker/proxy/main.py`.
 2. Add it to the static `/v1/models` list.
-3. Restart the proxy: `./scripts/hermes.sh restart` (or rebuild `zen-proxy` in the test stack).
+3. Restart the proxy: `./scripts/hermes.sh restart` (or `docker compose -f docker/docker-compose.yml up -d --build zen-proxy`).
 4. Point a bot at it via `HERMES_MODEL` in the profile config template.
 
 ### Add a bot profile
 
 1. Write the design plan under `profile-plans/`.
-2. Create `profiles/<name>/` — copy `config.yaml.template`, `SOUL.md`, and
-   `.env.example` from an existing profile; set the Discord token + home channel.
+2. Create `profiles/master/profiles/<name>/` — copy `config.yaml.template` and
+   `SOUL.md` from an existing named profile, copy its `skills/`, and set the
+   Discord home channel in `discord.channel_skill_bindings`. (Named profiles
+   have no `.env.example`; the entrypoint writes `.env` at start.)
 3. Add the bot to the `BOTS` array in `scripts/hermes.sh`.
-4. Add a matching service to `docker/docker-compose.yml` (live) and
-   `test/docker-compose.yml` (test mirror).
+4. Add matching env (`DISCORD_BOT_TOKEN_<NAME>` / `DISCORD_HOME_CHANNEL_<NAME>`)
+   to the gateway service's `environment:` in `docker/docker-compose.yml`
+   (one compose file for the whole stack), and document them in root
+   `.env.example`.
+5. If the bot needs a tool in the image (e.g. `tectonic` for the resumes bot's
+   LaTeX), add it to the `apk add` line in `test/Dockerfile`.
+6. If the bot works on a private git repo, `init` clones it into its
+   `workspace/` dir (see `HERMES_RESUMES_REPO` clone step) — the host needs an
+   SSH key. The container commits locally; push/pull stay on the host.
+7. Rebuild the gateway image and restart: `docker compose -f docker/docker-compose.yml up -d --build gateway`.
+   The entrypoint picks up the new named profile automatically (no new service needed).
 
 ### Add a skill
 

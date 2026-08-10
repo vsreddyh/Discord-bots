@@ -2,7 +2,7 @@ FROM python:3.11-alpine
 
 ENV PYTHONUNBUFFERED=1
 
-RUN apk add --no-cache bash git openssh-client curl sqlite
+RUN apk add --no-cache bash git openssh-client curl sqlite tectonic
 
 RUN pip install --no-cache-dir hermes-agent 'discord.py[voice]==2.7.1' pymongo
 

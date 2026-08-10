@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Fully-Dockerized live stack orchestrator.
 #
-# Everything (searxng, zen-proxy, health-api, 5 bots, dashboard, retention)
+# Everything (searxng, zen-proxy, health-api, 6 bots, dashboard, retention)
 # runs as compose services in docker/docker-compose.yml. init self-installs the
 # host tools it needs (curl, docker + compose, python3, cron, Tailscale,
 # opencode), builds the images, seeds the single root .env, copies skills,
@@ -15,7 +15,18 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-BOTS=(master story helldivers money food)
+BOTS=(master story helldivers money food resumes)
+
+# Multiplex layout: master is the default profile home; the other bots are
+# named profiles NESTED under it (profiles/master/profiles/<bot>/).
+profile_home() {
+    local b="$1"
+    if [[ "$b" == "master" ]]; then
+        echo "$REPO/profiles/master"
+    else
+        echo "$REPO/profiles/master/profiles/$b"
+    fi
+}
 
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
@@ -282,17 +293,27 @@ cmd_init() {
 
     local b
     for b in "${BOTS[@]}"; do
-        mkdir -p "$REPO/profiles/$b" "$REPO/workspace/$b"
+        mkdir -p "$(profile_home "$b")" "$REPO/workspace/$b"
     done
+
+    # The resumes bot works on a clone of the Resumes repo (private; SSH auth
+    # needs a key on this host — set it up before init). The container commits
+    # locally only; pull/push happen here on the host.
+    if [[ ! -d "$REPO/workspace/resumes/.git" ]]; then
+        info "Cloning Resumes repo into workspace/resumes..."
+        git clone "${HERMES_RESUMES_REPO:-git@github.com:vsreddyh/Resume.git}" "$REPO/workspace/resumes" 2>&1 \
+            || warn "clone failed — configure an SSH key for this host first (or set HERMES_RESUMES_REPO). ./scripts/hermes.sh start will still work, but the resumes bot won't have its workspace."
+    fi
 
     info "Installing project skills into each profile..."
     if [[ -d "$REPO/skills" ]]; then
         for b in "${BOTS[@]}"; do
+            local home; home="$(profile_home "$b")"
             for skill_dir in "$REPO/skills"/*/; do
                 skill_name="$(basename "$skill_dir")"
-                target="$REPO/profiles/$b/skills/$skill_name"
+                target="$home/skills/$skill_name"
                 if [[ ! -d "$target" ]]; then
-                    mkdir -p "$REPO/profiles/$b/skills"
+                    mkdir -p "$home/skills"
                     cp -r "$skill_dir" "$target"
                     info "  $b: installed skill $skill_name"
                 fi
@@ -300,7 +321,8 @@ cmd_init() {
         done
     fi
 
-    install_retention_cron
+install_retention_cron
+    bash "$SCRIPTS_DIR/sysmon.sh" install || true
 
     echo
     info "Initialization complete."
@@ -350,7 +372,7 @@ cmd_start() {
         done
     }
 
-    info "Starting Docker stack (searxng, zen-proxy, health-api, 5 bots, dashboard)..."
+    info "Starting Docker stack (searxng, zen-proxy, health-api, 6 bots, dashboard)..."
     docker_compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
 
     info "Running data retention ..."
@@ -393,8 +415,8 @@ cmd_status() {
 # ────────────────────────────────────────────────────────────
 cmd_clean() {
     echo -e "${RED}This wipes:${NC}"
-    echo "  - all profiles/* transient runtime state (sessions, logs, DBs, rendered config)"
-    echo "  - stale profiles/*/.env files (obsolete — secrets now live in root .env)"
+    echo "  - all profile runtime state (sessions, logs, DBs, rendered config)"
+    echo "  - per-profile .env files (regenerated at container start)"
     echo "  - the retention cron entry"
     echo "  - Docker volumes (searxng data) and containers"
     echo -e "${RED}Remote MongoDB is NOT touched. Committed files (skills, memories,"
@@ -409,6 +431,7 @@ cmd_clean() {
     info "Docker containers and volumes removed."
 
     remove_retention_cron
+    bash "$SCRIPTS_DIR/sysmon.sh" remove || true
     rm -rf "$RUN_DIR"
     info "run/ removed."
 
@@ -423,7 +446,7 @@ cmd_clean() {
 
 wipe_profile() {
     local b="$1"
-    local d="$REPO/profiles/$b"
+    local d; d="$(profile_home "$b")"
     [[ -d "$d" ]] || return 0
     info "Wiping $b runtime state ..."
     rm -f "$d/config.yaml" "$d/config.rendered.yaml" "$d/.env" \

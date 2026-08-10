@@ -1,6 +1,6 @@
-# VPS sizing — 5-bot Hermes stack (Dockerized)
+# VPS sizing — 6-bot Hermes stack (Dockerized)
 
-Fully Dockerized stack: 5 Hermes bots + zen-proxy + searxng + health-api + dashboard + retention.
+Fully Dockerized stack: six Hermes bots in **one multiplexed gateway** + zen-proxy + searxng + health-api + dashboard + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
 **Key fact: no LLM inference happens on this box.** OpenCode Zen / DeepInfra run the models, the
@@ -8,13 +8,13 @@ bots just stream text. Bots are I/O-bound (they wait on Discord + the network), 
 stay modest. No GPU needed.
 
 Numbers below are **measured** on a running stack (idle bots), not guessed. Concurrency tiers =
-number of Hermes agents running at the same time (max 5, one single-user session per bot).
+number of Hermes agents running at the same time (max 6, one single-user session per bot).
 
 | Tier | RAM | CPU | Disk | Network |
 |---|---|---|---|---|
 | Minimum — 1 agent at a time | 2 GB | 2 vCPU | 10 GB | 100 Mbps |
 | Recommended — 2 at the same time | 3 GB | 2 vCPU | 20 GB | 100 Mbps |
-| Maximum — all 5 at the same time | 5 GB | 4 vCPU | 30 GB | 100 Mbps |
+| Maximum — all 6 at the same time | 5 GB | 4 vCPU | 30 GB | 100 Mbps |
 
 ## OS
 
@@ -23,24 +23,20 @@ number of Hermes agents running at the same time (max 5, one single-user session
 
 ## RAM — the real numbers
 
-Measured live via `docker stats` on a running stack, all bots idle. The whole stack
-(5 bots + zen-proxy + health-api + dashboard + Mongo) sits at **~1.1 GiB**. Per container:
+Measured live via `docker stats` on a running stack, all bots idle (gateway-based, all bots in one
+process at measure time). The whole stack (bots + zen-proxy + health-api + dashboard + remote Mongo)
+sits at **~1.1 GiB**. The multiplexed layout (**all bots in ONE gateway container**) merges the bot rows
+into a single ~0.5 GiB gateway, i.e. roughly the same total. Per container:
 
 | Container | RAM (idle) |
 |---|---|
 | zen-proxy | ~35 MiB |
 | health-api | ~53 MiB |
 | dashboard | ~79 MiB |
-| story | ~103 MiB |
-| food | ~99 MiB |
-| money | ~96 MiB |
-| master | ~109 MiB |
-| helldivers | ~148 MiB |
-| in-stack Mongo | ~339 MiB |
+| gateway (multiplexed — all bots) | ~0.5 GiB (all bots, one process) |
 | **Stack total** | **~1.06 GiB** |
 
-+ searxng (~0.2 GB) + Docker + OS (~0.4 GB) → realistic **floor ≈ 1.5 GB with Mongo in-stack,
-≈ 1.1 GB with remote Mongo** (the production setup).
++ searxng (~0.2 GB) + Docker + OS (~0.4 GB) → realistic **floor ≈ 1.1 GB** (remote Mongo).
 
 Each **concurrently active agent** adds ~0.6 GB (conversation context + tool output; the model
 itself runs elsewhere).
@@ -62,7 +58,7 @@ guidance was ~2–3× over — safe, but you'd be paying for RAM the bots never 
 
 Measured (`docker system df` + repo `du`), not guessed:
 
-- Docker images: ~3.0 GB (bot 457 MB, searxng 258 MB, zen-proxy 187 MB, health-api 198 MB, + mongo)
+- Docker images: ~3.0 GB (bot 457 MB, searxng 258 MB, zen-proxy 187 MB, health-api 198 MB)
 - Volumes + container writable layers: ~0.5 GB
 - Live repo data (profiles, workspace, skills): ~0.15 GB
 - **Total keep-everything footprint: ~4 GB**

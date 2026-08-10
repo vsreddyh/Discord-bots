@@ -2,7 +2,7 @@
 
 This directory is the **source of truth for the fully-Dockerized live stack**:
 one compose file (`docker/docker-compose.yml`) that runs searxng, the zen-proxy,
-health-api, the five Hermes bot gateways, the dashboard, and the one-shot
+health-api, the six Hermes bots (one multiplexed gateway), the dashboard, and the one-shot
 retention job. Managed by `scripts/hermes.sh`.
 
 ## Services
@@ -12,12 +12,13 @@ retention job. Managed by `scripts/hermes.sh`.
 | `searxng` | private metasearch engine | 8888 |
 | `zen-proxy` | credit-aware LLM proxy (OpenCode Zen → DeepInfra) | 4000 |
 | `health-api` | Health Connect sync endpoint → MongoDB | 8001 |
-| `master` / `story` / `helldivers` / `money` / `food` | one Hermes Discord bot each | — |
+| `master` / `story` / `helldivers` / `money` / `food` / `resumes` | one Hermes Discord bot each | — |
 | `dashboard` | Hermes web dashboard (master profile, password auth) | 9119 |
 | `retention` | one-shot data lifecycle job (`tools/retention.py`) | — |
 
 The bot image is built from `../test` (`test/Dockerfile` + `test/entrypoint.sh`),
-which bakes in the `hermes-god` toolset — the same image the test stack uses.
+which bakes in the `hermes-god` toolset — the same image the dashboard and
+retention services build from.
 
 ## Quick Start
 
@@ -41,7 +42,7 @@ docker compose -f docker/docker-compose.yml run --rm retention --dry-run
 
 ```
 docker/
-├── docker-compose.yml      # FULL live stack (searxng + proxy + health-api + 5 bots + dashboard + retention)
+├── docker-compose.yml      # FULL live stack (searxng + proxy + health-api + 6 bots (1 gateway) + dashboard + retention)
 ├── Makefile                # searxng convenience commands
 ├── proxy/
 │   ├── main.py             # Credit-aware API proxy

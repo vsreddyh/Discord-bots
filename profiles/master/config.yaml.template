@@ -4,6 +4,12 @@ model:
   base_url: ${HERMES_BASE_URL}
   api_key: zen-proxy
 
+# The default profile is the multiplexer: one gateway process serves the
+# default + every named profile under HERMES_HOME/profiles/. Each named
+# profile carries its own Discord token/channel in its own .env.
+gateway:
+  multiplex_profiles: true
+
 auxiliary:
   vision:
     model: mimo-v2.5-free

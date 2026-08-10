@@ -10,6 +10,12 @@ load_root_env() {
     if [[ -f "$REPO/.env" ]]; then
         set -a; source "$REPO/.env"; set +a
     fi
+    # Dev isolation: HERMES_ENV=dev prefixes the DB name (hermes → test_hermes)
+    # for every consumer (bots, health-api, retention). prod/unset = as-is.
+    # Exported after load so compose interpolation sees it over --env-file.
+    if [[ "${HERMES_ENV:-}" == "dev" ]]; then
+        export MONGODB_DB_PREFIX=test_
+    fi
 }
 
 # Run docker compose, transparently falling back to sudo when the current

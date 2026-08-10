@@ -17,7 +17,7 @@ x-bot-base: &bot-base
     DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
     SEARXNG_URL: http://searxng:8080
     MONGODB_URI: ${MONGODB_URI:-}
-    MONGODB_DB: ${MONGODB_DB:-hermes}
+    MONGODB_DB: ${MONGODB_DB_PREFIX}${MONGODB_DB:-hermes}
   depends_on:
     zen-proxy:
       condition: service_healthy
@@ -78,7 +78,7 @@ services:
       - "8001:8000"
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB:-hermes}
+      MONGODB_DB: ${MONGODB_DB_PREFIX}${MONGODB_DB:-hermes}
       HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
@@ -90,75 +90,44 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # ──────────────────────────────────────────────────────
-  # Bot gateways — 1 master coordinator + 4 domain bots.
-  # Same image as the test stack (test/Dockerfile + entrypoint.sh), which
-  # bakes in the hermes-god toolset. Each bot bind-mounts its own profile
-  # (HERMES_HOME) + workspace.
+# ──────────────────────────────────────────────────────
+  # Multiplexed bot gateway — ONE process serves all 6 bots.
+  # HERMES_HOME (profiles/master) is the default profile; story/helldivers/
+  # money/food/resumes are named profiles under profiles/master/profiles/. The
+  # entrypoint renders each profile's config + writes each profile's .env
+  # (Discord token/channel) from these env vars, which Hermes reads as
+  # per-profile secrets (never merged into one global env).
   #
-  # ALL env comes from the single root .env (compose interpolation), mapped
-  # per service — one Discord token/home channel per bot. Deliberately NOT
-  # the whole root env (no proxy keys, and no host-oriented
+  # ALL env comes from the single root .env (compose interpolation).
+  # Deliberately NOT the whole root env (no proxy keys, and no host-oriented
   # SEARXNG_URL=localhost:8888, which would break web search in-container).
   # ──────────────────────────────────────────────────────
-  master:
+  gateway:
     <<: *bot-base
     volumes:
       - ../profiles/master:/hermes-home
-      - ../workspace/master:/workspace
+      - ../workspace:/workspace
       - ../tools:/tools:ro
     environment:
       <<: *bot-base-environment
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
-      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
-
-  story:
-    <<: *bot-base
-    volumes:
-      - ../profiles/story:/hermes-home
-      - ../workspace/story:/workspace
-      - ../tools:/tools:ro
-    environment:
-      <<: *bot-base-environment
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_STORY:-}
-      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_STORY:-}
-
-  helldivers:
-    <<: *bot-base
-    volumes:
-      - ../profiles/helldivers:/hermes-home
-      - ../workspace/helldivers:/workspace
-      - ../tools:/tools:ro
-    environment:
-      <<: *bot-base-environment
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_HELLDIVERS:-}
-      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_HELLDIVERS:-}
-
-  money:
-    <<: *bot-base
-    volumes:
-      - ../profiles/money:/hermes-home
-      - ../workspace/money:/workspace
-      - ../tools:/tools:ro
-    environment:
-      <<: *bot-base-environment
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MONEY:-}
-      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MONEY:-}
-
-  food:
-    <<: *bot-base
-    volumes:
-      - ../profiles/food:/hermes-home
-      - ../workspace/food:/workspace
-      - ../tools:/tools:ro
-    environment:
-      <<: *bot-base-environment
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
-      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
+      DISCORD_BOT_TOKEN_MASTER: ${DISCORD_BOT_TOKEN_MASTER:-}
+      DISCORD_HOME_CHANNEL_MASTER: ${DISCORD_HOME_CHANNEL_MASTER:-}
+      DISCORD_BOT_TOKEN_STORY: ${DISCORD_BOT_TOKEN_STORY:-}
+      DISCORD_HOME_CHANNEL_STORY: ${DISCORD_HOME_CHANNEL_STORY:-}
+      DISCORD_BOT_TOKEN_HELLDIVERS: ${DISCORD_BOT_TOKEN_HELLDIVERS:-}
+      DISCORD_HOME_CHANNEL_HELLDIVERS: ${DISCORD_HOME_CHANNEL_HELLDIVERS:-}
+      DISCORD_BOT_TOKEN_MONEY: ${DISCORD_BOT_TOKEN_MONEY:-}
+      DISCORD_HOME_CHANNEL_MONEY: ${DISCORD_HOME_CHANNEL_MONEY:-}
+      DISCORD_BOT_TOKEN_FOOD: ${DISCORD_BOT_TOKEN_FOOD:-}
+      DISCORD_HOME_CHANNEL_FOOD: ${DISCORD_HOME_CHANNEL_FOOD:-}
+      DISCORD_BOT_TOKEN_RESUMES: ${DISCORD_BOT_TOKEN_RESUMES:-}
+      DISCORD_HOME_CHANNEL_RESUMES: ${DISCORD_HOME_CHANNEL_RESUMES:-}
       USDA_API_KEY: ${USDA_API_KEY:-}
 
   # ──────────────────────────────────────────────────────
-  # Dashboard — password-protected web UI for the master profile.
+  # Dashboard — password-protected web UI. Unified mode: HERMES_HOME is the
+  # default (master) profile and the UI lists every named profile under
+  # profiles/master/profiles/ in one dashboard.
   # Auth (HERMES_DASHBOARD_BASIC_AUTH_*) comes from the root .env.
   # The package ships a prebuilt web_dist, so --skip-build works without
   # Node/npm.
@@ -199,7 +168,7 @@ services:
       - ../tools:/tools:ro
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB:-hermes}
+      MONGODB_DB: ${MONGODB_DB_PREFIX}${MONGODB_DB:-hermes}
     entrypoint: ["python3", "/tools/retention.py"]
     restart: "no"
 
