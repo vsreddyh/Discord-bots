@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remote-MongoDB helper for the Hermes bots (money, food, helldivers).
+"""Remote-MongoDB helper for the Hermes bots (money, food).
 
 Usage:
   mongo.py get <collection> [filter-json]
@@ -19,7 +19,6 @@ Collection conventions (stable — retention.sh depends on them):
   money_transactions                 money bot
   food_daily_stats / food_sleep_log /
   food_workouts / food_weight        food bot (weight is NEVER pruned)
-  helldivers_*                       helldivers static wiki data
 
 Date convention: store a `date` field as "YYYY-MM-DD" or a full ISO-8601
 string. Both compare lexicographically, which is what retention.sh relies on.

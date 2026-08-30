@@ -1,18 +1,18 @@
 model:
-  default: deepseek-v4-flash-free
-  provider: custom
+  default: muse-spark-1.2-contributor-free
+  provider: opencode
   base_url: ${HERMES_BASE_URL}
-  api_key: zen-proxy
+  api_key: ${OPENCODE_ZEN_API_KEY}
 
-# The default profile is the multiplexer: one gateway process serves the
-# default + every named profile under HERMES_HOME/profiles/. Each named
-# profile carries its own Discord token/channel in its own .env.
+# Gateway home: multiplex host for the 4 named profiles under
+# HERMES_HOME/profiles/ (story, money, food, resumes). This profile is NOT
+# a bot itself — it only hosts the multiplexed gateway.
 gateway:
   multiplex_profiles: true
 
 auxiliary:
   vision:
-    model: mimo-v2.5-free
+    model: muse-spark-1.2-contributor-free
 
 agent:
   max_turns: 90
@@ -120,6 +120,7 @@ onboarding:
 
 group_sessions_per_user: false
 
+# Gateway home has no Discord bot; named profiles own their channels.
 discord:
   require_mention: true
   auto_thread: false
@@ -128,11 +129,7 @@ discord:
     enabled: true
     ambient_enabled: true
     ack_enabled: true
-  channel_skill_bindings:
-    - id: "${DISCORD_HOME_CHANNEL}"
-      skills:
-        - i-have-adhd
-        - docker-management
+  channel_skill_bindings: []
 
 platform_toolsets:
   cli:

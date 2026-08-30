@@ -5,8 +5,8 @@ Runs inside the `retention` service of the live Docker stack (see
 docker/docker-compose.yml) and natively via `scripts/retention.sh` (which wraps
 `docker compose run --rm retention`). Policy summary:
 
-  story       no domain DB                   — no-op
-  helldivers  static wiki DB (reference)     — no-op, never wiped
+  story       git repo (workspace/portals)    — no-op
+  resumes     git repo (workspace/resumes)    — no-op
   money       transactions autowiped when the oldest entry is >90 days old
   food        date-based rows pruned after 30 days; food_weight is NEVER touched
 
@@ -61,8 +61,8 @@ def main() -> int:
             db[col].delete_many({"date": {"$lt": food_cutoff}})
         print(f"{prefix}food: would remove {count} from {col} older than {food_cutoff}")
 
-    # ── helldivers / story: static or no data — no-op ────────────
-    print("[retention] helldivers/story: no retention policy (static/no DB).")
+    # ── story / resumes: git repos — no-op ─────────────────────
+    print("[retention] story/resumes: no retention policy (git repos).")
     client.close()
     return 0
 

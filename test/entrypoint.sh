@@ -6,11 +6,18 @@ set -euo pipefail
 # NOTE: env is injected entirely by docker-compose (from the single root
 # .env). There is no per-profile .env to source anymore.
 #
-# Multiplex layout: HERMES_HOME is the DEFAULT profile (master) home and
-# every sibling bot is a NAMED profile under $HERMES_HOME/profiles/<name>.
-# compimose mounts ../profiles/master:/hermes-home and ../workspace:/workspace,
-# so this renders config.yaml for ALL profiles and writes each named profile's
-# .env (Discord token/channel in the per-profile-secret scope Hermes reads).
+# Multiplex layout: HERMES_HOME is the gateway home (profiles/master) and
+# every bot is a NAMED profile under $HERMES_HOME/profiles/<name>.
+# compose mounts ../profiles/master:/hermes-home and ../workspace:/workspace,
+# so this renders config.yaml for the gateway home + each named profile and
+# writes each named profile's .env (Discord token/channel in the per-profile-
+# secret scope Hermes reads).
+#
+# With s6-overlay, HERMES_DASHBOARD=1 runs dashboard alongside gateway in
+# the SAME container (mirrors official nousresearch/hermes-agent image:
+# `gateway run` supervised by s6, dashboard is an s6-rc service). Without
+# it the container only runs the multiplexed gateway. HERMES_MODE=dashboard
+# is deprecated but kept for backward compat (runs dashboard only).
 
 if [[ "${1:-}" == "chown-data" ]]; then
     uid="${HERMES_UID:-1000}"
@@ -20,7 +27,7 @@ if [[ "${1:-}" == "chown-data" ]]; then
 fi
 
 # Docker-environment defaults, used by both the live and test stacks.
-export HERMES_BASE_URL="${HERMES_BASE_URL:-http://zen-proxy:4000/v1}"
+export HERMES_BASE_URL="${HERMES_BASE_URL:-https://opencode.ai/zen/v1}"
 export MONGODB_URI="${MONGODB_URI:-mongodb://mongodb:27017}"
 export MONGODB_DB="${MONGODB_DB:-hermes}"
 
@@ -48,7 +55,7 @@ PY
 
 write_profile_env() {
     # Write one profile's .env with its own Discord creds. $1 = home,
-    # $2 = profile name (master/story/helldivers/money/food).
+    # $2 = profile name (story/money/food/resumes).
     local home="$1" name="$2" envf
     envf="$home/.env"
     # Mapping is deterministic: DISCORD_BOT_TOKEN_<NAME upper> in the
@@ -69,33 +76,61 @@ write_profile_env() {
 warning() { echo "[entrypoint] WARN: $*" >&2; }
 info() { echo "[entrypoint] $*"; }
 
-# ── Default profile (master) ───────────────────────────
-export HERMES_CWD="${HERMES_CWD:-/workspace/master}"
-render_config "$HERMES_HOME"
-write_profile_env "$HERMES_HOME" master
+do_render() {
+    # ── Gateway home (profiles/master — not a bot, just the multiplex host) ──
+    export HERMES_CWD="${HERMES_CWD:-/workspace}"
+    render_config "$HERMES_HOME"
 
-# ── Named profiles (story, helldivers, money, food) ────
-for home in "$HERMES_HOME"/profiles/*/; do
-    [[ -d "$home" ]] || continue
-    name="$(basename "$home")"
-    # Hermes auto-creates profiles/default/ for the dashboard/gateway; it is
-    # not a bot profile, so skip it.
-    [[ "$name" == "default" ]] && continue
-    # Each named profile runs in its own workspace subdir.
-    HERMES_CWD="/workspace/$name" render_config "$home"
-    write_profile_env "$home" "$name"
-done
+    # ── Named profiles (story, money, food, resumes) ───────
+    for home in "$HERMES_HOME"/profiles/*/; do
+        [[ -d "$home" ]] || continue
+        name="$(basename "$home")"
+        # Hermes auto-creates profiles/default/ for the dashboard/gateway; it is
+        # not a bot profile, so skip it.
+        [[ "$name" == "default" ]] && continue
+        upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
+        tokv="DISCORD_BOT_TOKEN_${upper}"
+        chv="DISCORD_HOME_CHANNEL_${upper}"
+        # Export per-profile channel so ${DISCORD_HOME_CHANNEL} in the template
+        # renders correctly for named profiles (was previously hardcoded).
+        export DISCORD_HOME_CHANNEL="${!chv:-}"
+        export DISCORD_BOT_TOKEN="${!tokv:-}"
+        HERMES_CWD="/workspace/$name" render_config "$home"
+        write_profile_env "$home" "$name"
+    done
 
-export HERMES_HOME
+    export HERMES_HOME
+}
 
+# render-only is used by s6 cont-init ( /etc/cont-init.d/01-render-config )
+if [[ "${1:-}" == "render-only" ]]; then
+    do_render
+    exit 0
+fi
+
+# Normal startup: render first
+do_render
+
+# Backward compat: HERMES_MODE=dashboard runs dashboard only (deprecated)
 if [[ "${HERMES_MODE:-gateway}" == "dashboard" ]]; then
-    # Web dashboard for the master profile — unified mode lists every named
-    # profile under HERMES_HOME/profiles/. The package ships a prebuilt
-    # hermes_cli/web_dist, so --skip-build needs no Node/npm.
+    warning "HERMES_MODE=dashboard is deprecated, use HERMES_DASHBOARD=1"
     exec hermes dashboard \
         --host "${HERMES_DASHBOARD_HOST:-0.0.0.0}" \
         --port "${HERMES_DASHBOARD_PORT:-9119}" \
         --no-open --skip-build
+fi
+
+# HERMES_DASHBOARD=1 (or true/yes) → run both gateway + dashboard supervised by s6
+dashboard_enabled=0
+case "${HERMES_DASHBOARD:-0}" in
+    1|true|TRUE|True|yes|YES|Yes) dashboard_enabled=1 ;;
+esac
+
+if [[ "$dashboard_enabled" == "1" ]]; then
+    info "HERMES_DASHBOARD=1 — starting s6 supervision (gateway + dashboard on :${HERMES_DASHBOARD_PORT:-9119})"
+    # Ensure dashboard service is enabled for s6 (remove down file if present)
+    rm -f /etc/services.d/dashboard/down 2>/dev/null || true
+    exec /init
 fi
 
 exec hermes gateway run --force --accept-hooks

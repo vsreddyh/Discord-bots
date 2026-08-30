@@ -86,7 +86,7 @@ The bot replies with a plan (files to touch, diff after), then commits + pushes.
 
 ## Profile
 
-Isolated workspace (same setup as food/money/helldivers bots), Discord-connected.
+Isolated workspace (same setup as food/money/resumes bots), Discord-connected.
 At setup the profile clones `git@github.com:vsreddyh/portals.git` (SSH key for
 the account must be available to the profile). No cron — updates happen only
 when the user asks. SQLite not required; the clone's git history + markdown

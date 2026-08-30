@@ -1,8 +1,8 @@
 model:
-  default: deepseek-v4-flash-free
-  provider: custom
+  default: muse-spark-1.2-contributor-free
+  provider: opencode
   base_url: ${HERMES_BASE_URL}
-  api_key: zen-proxy
+  api_key: ${OPENCODE_ZEN_API_KEY}
 
 agent:
   max_turns: 90
@@ -42,7 +42,7 @@ discord:
   auto_thread: false
   reactions: true
   channel_skill_bindings:
-    - id: "1536259587152543825"
+    - id: "${DISCORD_HOME_CHANNEL}"
       skills:
         - i-have-adhd
 

@@ -10,11 +10,20 @@ load_root_env() {
     if [[ -f "$REPO/.env" ]]; then
         set -a; source "$REPO/.env"; set +a
     fi
-    # Dev isolation: HERMES_ENV=dev prefixes the DB name (hermes → test_hermes)
-    # for every consumer (bots, health-api, retention). prod/unset = as-is.
+    # Dev isolation: HERMES_ENV=dev uses a temporary local MongoDB container
+    # (mongodb:27017) instead of the remote Atlas cluster. Prod/unset uses
+    # the remote MONGODB_URI as-is. This keeps dev writes off the prod DB
+    # without needing a separate test_ database on Atlas.
     # Exported after load so compose interpolation sees it over --env-file.
     if [[ "${HERMES_ENV:-}" == "dev" ]]; then
-        export MONGODB_DB_PREFIX=test_
+        export MONGODB_URI="mongodb://mongodb:27017"
+        export MONGODB_DB="${MONGODB_DB:-hermes}"
+        # Enable the `dev` compose profile so the local `mongodb` service is started.
+        if [[ -z "${COMPOSE_PROFILES:-}" ]]; then
+            export COMPOSE_PROFILES=dev
+        elif [[ ",$COMPOSE_PROFILES," != *",dev,"* ]]; then
+            export COMPOSE_PROFILES="${COMPOSE_PROFILES},dev"
+        fi
     fi
 }
 

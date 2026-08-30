@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Fully-Dockerized live stack orchestrator.
 #
-# Everything (searxng, zen-proxy, health-api, 6 bots, dashboard, retention)
+# Everything (searxng, health-api, gateway+dashboard (4 bots), retention) — direct to https://opencode.ai/zen/v1, no proxy
 # runs as compose services in docker/docker-compose.yml. init self-installs the
-# host tools it needs (curl, docker + compose, python3, cron, Tailscale,
+# host tools it needs (curl, docker + compose, python3, cron,
 # opencode), builds the images, seeds the single root .env, copies skills,
 # and installs the retention cron. Only git + sudo must pre-exist.
 # All env lives in the root .env (no per-profile .env files).
@@ -15,17 +15,14 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-BOTS=(master story helldivers money food resumes)
+BOTS=(story money food resumes)
+GATEWAY_HOME="$REPO/profiles/master"
 
-# Multiplex layout: master is the default profile home; the other bots are
+# Multiplex layout: profiles/master is the gateway home; bots are
 # named profiles NESTED under it (profiles/master/profiles/<bot>/).
 profile_home() {
     local b="$1"
-    if [[ "$b" == "master" ]]; then
-        echo "$REPO/profiles/master"
-    else
-        echo "$REPO/profiles/master/profiles/$b"
-    fi
+    echo "$REPO/profiles/master/profiles/$b"
 }
 
 # shellcheck source=scripts/lib/common.sh
@@ -43,8 +40,8 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env (all env vars) + skills, set up Tailscale + host tools (opencode, python), install retention cron
-  start      Start the whole Docker stack (searxng, proxy, bots, dashboard)
+  init       Build images, seed the root .env (all env vars) + skills, set up host tools (opencode, python), install retention cron
+  start      Start the whole Docker stack (searxng, health-api, gateway+dashboard (4 bots))
   stop       Stop the Docker stack
   restart    Stop then start
   status     Show all service states
@@ -83,89 +80,6 @@ remove_retention_cron() {
 }
 
 # ────────────────────────────────────────────────────────────
-# TAILSCALE (private access to dashboard :9119 + health-api :8001)
-# ────────────────────────────────────────────────────────────
-_tailscale_online() {
-    # Exit 0 when the tailnet is up and authenticated. Try without sudo first,
-    # then non-interactive sudo (no prompt spam in the poll loop).
-    tailscale status --json 2>/dev/null | python3 -c 'import json,sys
-try:
-    sys.exit(0 if json.load(sys.stdin).get("Self", {}).get("Online") else 1)
-except Exception:
-    sys.exit(1)' 2>/dev/null \
-        || sudo -n tailscale status --json 2>/dev/null | python3 -c 'import json,sys
-try:
-    sys.exit(0 if json.load(sys.stdin).get("Self", {}).get("Online") else 1)
-except Exception:
-    sys.exit(1)' 2>/dev/null
-}
-
-_tailscale_ip() {
-    local ip
-    ip="$(tailscale ip -4 2>/dev/null | head -1)"
-    [[ -z "$ip" ]] && ip="$(sudo -n tailscale ip -4 2>/dev/null | head -1)"
-    echo "$ip"
-}
-
-ensure_tailscale() {
-    [[ "${HERMES_NO_TAILSCALE:-0}" == "1" ]] && { info "Tailscale setup skipped (HERMES_NO_TAILSCALE=1)."; return 0; }
-
-    if ! command -v tailscale &>/dev/null; then
-        if command -v sudo &>/dev/null; then
-            info "Installing Tailscale..."
-            curl -fsSL https://tailscale.com/install.sh | sudo sh 2>&1 | sed 's/^/  /' \
-                || { warn "Tailscale install failed — install manually: https://tailscale.com/download"; return 1; }
-        else
-            warn "tailscale not found and sudo unavailable — install manually: https://tailscale.com/download"
-            return 1
-        fi
-    fi
-
-    if ! _tailscale_online; then
-        info "Tailscale is not up — starting it and waiting for your browser login (up to 60s)..."
-        local out url
-        out="$(sudo tailscale up 2>&1 || true)"
-        echo "$out" | sed 's/^/  /'
-        url="$(echo "$out" | grep -oE 'https://login\.tailscale\.com/[A-Za-z0-9?&=.-]+' | head -1)"
-        [[ -n "$url" ]] && info "Log in here: $url"
-        for _ in $(seq 1 12); do
-            _tailscale_online && break
-            sleep 5
-        done
-        if ! _tailscale_online; then
-            warn "Tailscale login not completed — run 'sudo tailscale up' manually, then re-run init."
-            return 1
-        fi
-    fi
-
-    local ip
-    ip="$(_tailscale_ip)"
-    info "Tailscale up — tailnet IP: ${ip:-<unknown>}"
-    info "  dashboard:   http://${ip:-<ip>}:9119"
-    info "  health-api:  http://${ip:-<ip>}:8001  (set this as the URL in the Android app)"
-}
-
-ensure_tailscale_firewall() {
-    [[ "${HERMES_NO_TAILSCALE:-0}" == "1" ]] && return 0
-    if ! command -v ufw &>/dev/null; then
-        warn "ufw not installed — add firewall rules manually (see README 'Access (Tailscale)')."
-        return 0
-    fi
-    if ! sudo ufw status 2>/dev/null | grep -q "Status: active"; then
-        warn "ufw is not active — not enabling default-deny automatically (risk of lockout)."
-        warn "  To lock down to tailnet-only, run:"
-        warn "    sudo ufw default deny incoming"
-        warn "    sudo ufw allow 22/tcp"
-        warn "    sudo ufw allow in on tailscale0"
-        warn "    sudo ufw enable"
-        return 0
-    fi
-    info "Adding tailnet firewall rules (idempotent)..."
-    sudo ufw allow in on tailscale0 2>&1 | sed 's/^/  /' || warn "  could not add tailscale0 rule (run with sudo)."
-    sudo ufw allow 22/tcp 2>&1 | sed 's/^/  /' || true
-}
-
-# ────────────────────────────────────────────────────────────
 # HOST TOOLS (docker, curl, python, cron, opencode)
 # ────────────────────────────────────────────────────────────
 # apt-install <pkgs...> — runs apt-get install, prints output indented, and
@@ -181,10 +95,50 @@ apt_install() {
     return "$rc"
 }
 
+# Generic installer that dispatches to the host's package manager.
+# Debian/Ubuntu → apt, Arch → pacman, Fedora → dnf. Maps common package names.
+pkg_install() {
+    if command -v apt-get &>/dev/null; then
+        apt_install "$@"
+        return $?
+    elif command -v pacman &>/dev/null; then
+        local mapped=()
+        local p
+        for p in "$@"; do
+            case "$p" in
+                cron) p="cronie" ;;
+                docker.io) p="docker" ;;
+                docker-compose-v2|docker-compose-plugin) p="docker-compose" ;;
+                python3-venv) p="python-virtualenv" ;;
+                python3-pip) p="python-pip" ;;
+            esac
+            mapped+=("$p")
+        done
+        local out rc
+        set +e
+        out="$(sudo pacman -Sy --noconfirm "${mapped[@]}" 2>&1)"
+        rc=$?
+        set -e
+        printf '%s\n' "$out" | sed 's/^/  /'
+        return "$rc"
+    elif command -v dnf &>/dev/null; then
+        local out rc
+        set +e
+        out="$(sudo dnf install -y "$@" 2>&1)"
+        rc=$?
+        set -e
+        printf '%s\n' "$out" | sed 's/^/  /'
+        return "$rc"
+    else
+        warn "No supported package manager (apt-get/pacman/dnf) — install manually: $*"
+        return 1
+    fi
+}
+
 ensure_curl() {
     command -v curl &>/dev/null && return 0
-    info "curl not found — installing (needed by tailscale + opencode installers)."
-    apt_install curl || { warn "curl install failed — install curl manually."; return 1; }
+    info "curl not found — installing (needed by opencode installer)."
+    pkg_install curl || { warn "curl install failed — install curl manually."; return 1; }
     info "curl installed."
 }
 
@@ -194,14 +148,14 @@ ensure_docker() {
             info "docker + compose plugin available."
         else
             info "docker present — installing compose plugin..."
-            apt_install docker-compose-v2 docker-compose-plugin 2>/dev/null \
+            pkg_install docker-compose-v2 docker-compose-plugin 2>/dev/null \
                 || { warn "compose plugin install failed."; return 1; }
         fi
     else
         info "docker not found — installing docker.io + compose plugin..."
-        if ! apt_install docker.io docker-compose-v2; then
+        if ! pkg_install docker.io docker-compose-v2; then
             # Some distros/repos name the plugin differently (Docker Inc repo).
-            apt_install docker.io docker-compose-plugin || {
+            pkg_install docker.io docker-compose-plugin || {
                 warn "docker install failed — install manually: https://docs.docker.com/engine/install/"
                 return 1
             }
@@ -222,7 +176,7 @@ ensure_python() {
         return 0
     fi
     warn "python3 >= 3.9 not found — installing python3 + pip (host tooling)."
-    apt_install python3 python3-pip python3-venv \
+    pkg_install python3 python3-pip python3-venv \
         || { warn "python install failed — install python3 manually."; return 1; }
     info "python3 installed: $(python3 --version 2>&1)."
 }
@@ -230,8 +184,11 @@ ensure_python() {
 ensure_cron() {
     command -v crontab &>/dev/null && return 0
     info "cron not found — installing."
-    apt_install cron || { warn "cron install failed — retention won't schedule."; return 1; }
-    sudo systemctl enable --now cron 2>&1 | sed 's/^/  /' || true
+    if ! pkg_install cron; then
+        warn "cron install failed — retention won't schedule. On Arch: sudo pacman -S cronie && sudo systemctl enable --now cronie"
+        return 1
+    fi
+    sudo systemctl enable --now cron 2>&1 | sed 's/^/  /' || sudo systemctl enable --now cronie 2>&1 | sed 's/^/  /' || true
     info "cron installed."
 }
 
@@ -282,27 +239,61 @@ cmd_init() {
 
     ensure_curl || true
     ensure_docker || true
-    ensure_tailscale || true
-    ensure_tailscale_firewall || true
     ensure_python || true
     ensure_opencode || true
     ensure_cron || true
 
-    info "Building Docker images (bot image, zen-proxy, health-api)..."
+    info "Building Docker images (bot image, health-api)..."
     docker_compose -f "$COMPOSE" build 2>&1 || { error "docker compose build failed."; exit 1; }
+    info "Pruning dangling build cache (prevents 7+ GB bloat)..."
+    docker builder prune -f 2>&1 | sed 's/^/  /' || true
 
+    mkdir -p "$GATEWAY_HOME" "$REPO/workspace"
     local b
     for b in "${BOTS[@]}"; do
         mkdir -p "$(profile_home "$b")" "$REPO/workspace/$b"
     done
+    # Fix ownership before cloning: when run via sudo, dirs are root-owned and
+    # clone as $SUDO_USER would get Permission denied. Do it now, not after.
+    if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
+        chown -R "$SUDO_USER:${SUDO_USER:-$(id -gn "$SUDO_USER")}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
+    fi
 
-    # The resumes bot works on a clone of the Resumes repo (private; SSH auth
-    # needs a key on this host — set it up before init). The container commits
-    # locally only; pull/push happen here on the host.
+    # Each git-backed bot keeps its own repo clone in workspace/ (private; SSH
+    # auth needs a key on this host — set it up before init). The container
+    # commits locally only; pull/push happen here on the host. Both repos stay
+    # as separate git remotes; this repo does NOT vendor their files.
+    #  - vsreddyh/portals → workspace/portals (story bot lore vault; story cwd is workspace/story)
+    #  - vsreddyh/Resume  → workspace/resumes  (resumes bot cwd IS the repo)
+    # In dev (HERMES_ENV=dev) the existing host key at ~/.ssh (or $SUDO_USER's
+    # ~/.ssh when run with sudo) is reused — no key generation. In prod add
+    # the deploy key to ~/.ssh before running init.
+    _clone_repo() {
+        local url="$1" dest="$2"
+        # When run via sudo, clone as the invoking user so the host's existing
+        # key (e.g. /home/vsreddyh/.ssh/id_ed25519 in dev) is used and files
+        # stay owned by that user, not root.
+        if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
+            sudo -u "$SUDO_USER" env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone "$url" "$dest" 2>&1
+        else
+            env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone "$url" "$dest" 2>&1
+        fi
+    }
     if [[ ! -d "$REPO/workspace/resumes/.git" ]]; then
         info "Cloning Resumes repo into workspace/resumes..."
-        git clone "${HERMES_RESUMES_REPO:-git@github.com:vsreddyh/Resume.git}" "$REPO/workspace/resumes" 2>&1 \
+        _clone_repo "${HERMES_RESUMES_REPO:-git@github.com:vsreddyh/Resume.git}" "$REPO/workspace/resumes" \
             || warn "clone failed — configure an SSH key for this host first (or set HERMES_RESUMES_REPO). ./scripts/hermes.sh start will still work, but the resumes bot won't have its workspace."
+    fi
+    if [[ ! -d "$REPO/workspace/portals/.git" ]]; then
+        info "Cloning Portals (lore vault) repo into workspace/portals..."
+        _clone_repo "${HERMES_PORTALS_REPO:-git@github.com:vsreddyh/portals.git}" "$REPO/workspace/portals" \
+            || warn "clone failed — configure an SSH key for this host first (or set HERMES_PORTALS_REPO). ./scripts/hermes.sh start will still work, but the story bot won't have its vault."
+    fi
+    unset -f _clone_repo
+    # When run with sudo, ensure workspace/profile dirs stay owned by the
+    # invoking user (not root), so dev edits don't need sudo. Prod also benefits.
+    if [[ -n "${SUDO_USER:-}" && "$(id -u)" == "0" ]]; then
+        chown -R "$SUDO_USER:${SUDO_USER:-$(id -gn "$SUDO_USER")}" "$REPO/workspace" "$GATEWAY_HOME" 2>/dev/null || true
     fi
 
     info "Installing project skills into each profile..."
@@ -327,13 +318,8 @@ install_retention_cron
     echo
     info "Initialization complete."
     echo "  Next: edit .env with real tokens (DISCORD_BOT_TOKEN_*, Mongo URI), then ./scripts/hermes.sh start"
-    local _tip
-    _tip="$(_tailscale_ip)"
-    if [[ -n "$_tip" ]]; then
-        echo "  Access: dashboard at http://$_tip:9119 (Tailscale only)"
-    else
-        echo "  Access: dashboard on port 9119 (run 'sudo tailscale up' for the tailnet URL)"
-    fi
+    echo "  Access: dashboard at http://<host>:9119  (set HERMES_DASHBOARD_BASIC_AUTH_* in .env)"
+    echo "  Access: health-api at http://<host>:8001"
 }
 
 # ────────────────────────────────────────────────────────────
@@ -372,8 +358,16 @@ cmd_start() {
         done
     }
 
-    info "Starting Docker stack (searxng, zen-proxy, health-api, 6 bots, dashboard)..."
-    docker_compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
+    info "Starting Docker stack (searxng, health-api, gateway+dashboard (4 bots))..."
+    # Use BuildKit cache for pip (test/Dockerfile + health-api/Dockerfile have
+    # --mount=type=cache,target=/root/.cache/pip). Restarts should reuse cache
+    # and not prune it — only `init` does a full --build.
+    if [[ "${HERMES_NO_BUILD:-0}" == "1" ]]; then
+        docker_compose -f "$COMPOSE" up -d 2>&1 || { error "docker compose up failed."; exit 1; }
+    else
+        docker_compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
+        docker builder prune -f 2>&1 | sed 's/^/  /' || true
+    fi
 
     info "Running data retention ..."
     bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
@@ -396,8 +390,17 @@ cmd_stop() {
 }
 
 cmd_restart() {
-    echo "=== Stopping ===" && cmd_stop
-    echo "" && echo "=== Starting ===" && cmd_start
+    # Rebuild for changed files but reuse BuildKit cache (pip cache in /root/.cache/pip
+    # via --mount=type=cache, plus layer cache). `up -d --build` only rebuilds
+    # layers whose COPY/requirements changed; unchanged pip wheels hit cache.
+    echo "=== Restarting (rebuild with cache) ==="
+    info "Rebuilding changed layers (BuildKit cache: pip /root/.cache/pip)..."
+    docker_compose -f "$COMPOSE" up -d --build 2>&1 || { error "docker compose up failed."; exit 1; }
+    # keep builder cache for next restart; `start` prunes dangling, `restart` does not
+    info "Running data retention ..."
+    bash "$SCRIPTS_DIR/retention.sh" run 2>&1 | sed 's/^/  /' || true
+    echo ""
+    cmd_status
 }
 
 # ────────────────────────────────────────────────────────────
@@ -407,7 +410,7 @@ cmd_status() {
     echo "Hermes Agent Status (docker stack)" && echo ""
     docker_compose -f "$COMPOSE" ps
     echo ""
-    echo "Logs: docker compose -f docker/docker-compose.yml logs -f <service>"
+    echo "Logs: docker compose -f docker/docker-compose.yml logs -f <service>  (gateway includes dashboard when HERMES_DASHBOARD=1)"
 }
 
 # ────────────────────────────────────────────────────────────
@@ -439,6 +442,19 @@ cmd_clean() {
     for b in "${BOTS[@]}"; do
         wipe_profile "$b"
     done
+    # Also wipe gateway home rendered config / runtime (not a bot, but Hermes
+    # writes state there too).
+    if [[ -d "$GATEWAY_HOME" ]]; then
+        info "Wiping gateway home runtime state ..."
+        rm -f "$GATEWAY_HOME/config.yaml" "$GATEWAY_HOME/config.rendered.yaml" \
+            "$GATEWAY_HOME/auth.lock" "$GATEWAY_HOME/gateway.lock" \
+            "$GATEWAY_HOME/channel_directory.json" \
+            "$GATEWAY_HOME/.skills_prompt_snapshot.json" "$GATEWAY_HOME/.clean_shutdown"
+        rm -rf "$GATEWAY_HOME"/.cache "$GATEWAY_HOME"/.local "$GATEWAY_HOME"/sessions \
+            "$GATEWAY_HOME"/state "$GATEWAY_HOME"/state.db* "$GATEWAY_HOME"/logs "$GATEWAY_HOME"/cron "$GATEWAY_HOME"/kanban* \
+            "$GATEWAY_HOME"/gateway* "$GATEWAY_HOME"/bin "$GATEWAY_HOME"/data "$GATEWAY_HOME"/image_cache "$GATEWAY_HOME"/audio_cache \
+            "$GATEWAY_HOME"/hooks "$GATEWAY_HOME"/sandboxes "$GATEWAY_HOME"/platforms "$GATEWAY_HOME"/pairing "$GATEWAY_HOME"/cache
+    fi
 
     echo ""
     info "Clean complete. Re-run ./scripts/hermes.sh init to start over."

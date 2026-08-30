@@ -8,17 +8,15 @@ Hermes Agent profile: money tracking via Discord.
 - Daily + monthly summaries (Discord)
 - Single bucket — no accounts, no budgets, no savings goals
 
-## SQLite Schema
+## MongoDB Schema
 
-Local SQLite DB — a single file in the profile data dir. No remote/postgres
-DB; all bots share this rule.
+Remote MongoDB (`hermes` DB) for prod; temporary local `mongodb:27017` (no volume) for dev via `HERMES_ENV=dev`.
 
-- `transactions` (date, amount, type, category, note)
-  - `type`: `income` | `expense`
+- Collection `money_transactions` (date `YYYY-MM-DD` lexicographic, amount, type `income`|`expense`, category, note)
   - `category`: normalized (groceries, eating out, transport, bills, rent,
     shopping, health, fun, other, ...)
 
-Agent queries SQLite directly (`sqlite3` CLI or inline Python).
+Agent queries via `tools/mongo.py` (pymongo) or `health-api` — no local SQLite.
 
 ## Chat Interaction
 
@@ -47,8 +45,7 @@ and type, replies naturally.
 
 ## Profile
 
-Isolated workspace, Discord-connected (same setup as food/workout bot). SQLite
-DB in profile data dir.
+Isolated workspace (`/workspace/money`), Discord-connected (same setup as food/workout bot). Remote MongoDB (`money_transactions`), retention autowipes >90d.
 
 ### Discord identity
 

@@ -18,7 +18,7 @@ status:
 	$(COMPOSE) ps
 
 setup:
-	cp -n ../.env.example ../.env || echo ".env already exists — edit it to add your API keys"
+	@if [ -f ../.env ]; then echo ".env already exists — edit it to add your API keys"; else cp ../.env.example ../.env && echo "Created ../.env from .env.example — edit it before starting"; fi
 	$(COMPOSE) up -d
 
 build:

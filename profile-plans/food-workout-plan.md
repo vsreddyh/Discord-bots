@@ -20,23 +20,17 @@ chat-triggered summaries.
 - Track weight, calories, macros (kcal, protein, carbs, fat, fiber)
 - Out of scope: micros, barcode, photo logging, water, reminders, weekly reports
 
-## SQLite Schema
+## MongoDB Schema
 
-Local SQLite DB — a single file in the profile data dir. No remote/postgres
-DB; all bots share this rule.
+Remote MongoDB (`hermes` DB) for prod; temporary local `mongodb:27017` (no volume) for dev via `HERMES_ENV=dev`. No local SQLite.
 
-- `profile` (weight_kg, weight_goal_kg, height_cm, age, activity_level)
-- `foods` (name, kcal, protein_g, carbs_g, fat_g, fiber_g per 100g, source)
-- `meal_items` (meal_id, food_id, grams)
-- `meals` (date, type)
-- `workouts` (date, type, duration, notes) — from Health Connect
-- `daily_stats` (date, steps, active_calories)
-- `sleep_log` (date, sleep_start, wake_time, hours, quality) — gateway
-  auto-fills hours, user confirms/annotates quality in the morning
-- `targets` (protein_g, carbs_g, fat_g, fiber_g, kcal) — editable in chat
+- `food_daily_stats` (date, steps, active_calories) — one doc per date
+- `food_sleep_log` (date, sleep_start, wake_time, hours) — gateway auto-fills hours
+- `food_workouts` (date, type, duration, notes) — from Health Connect
+- `food_weight` (date, weight_kg) — **never pruned by retention**
+- `food` lookups via USDA (`foods` cache conceptually now in-memory/LLM, not SQLite `foods`/`meal_items`)
 
-Python helper script: add meal, log weight/sleep, sync watch data,
-fix/remove meals, daily/weekly summary.
+Python helper: `tools/mongo.py` + `tools/retention.py` (30d prune for date rows, weight untouched).
 
 ## Food Lookup
 
@@ -55,7 +49,7 @@ fix/remove meals, daily/weekly summary.
 
 Health Connect + custom Android gateway app:
 
-watch → Mi Fitness (BLE) → Health Connect → gateway app → bot REST API → SQLite.
+watch → Mi Fitness (BLE) → Health Connect → gateway app → health-api (:8001) → MongoDB.
 
 - Reads Health Connect via Jetpack SDK 1.1.0 (`readRecords()` for
   sleep/workouts, `aggregate()` for steps); foreground service, hourly sync;
@@ -108,7 +102,7 @@ Request body (JSON):
 }
 ```
 
-Bot must accept this and persist to SQLite; respond 2xx. App treats non-2xx or
+Bot (health-api) must accept this and persist to MongoDB; respond 2xx. App treats non-2xx or
 network failure as sync failure (retry next hour). `steps`/`activeCaloriesKcal`
 are null before the first Health Connect read.
 
@@ -117,8 +111,7 @@ morning sleep confirmation in chat → `sleep_log`.
 
 ## Profile
 
-Isolated workspace. REST endpoint for the gateway app — LAN reachable (or local
-reverse proxy), token per install. SQLite DB in profile data dir.
+Isolated workspace (`/workspace/food`). REST endpoint via `health-api` (:8001), token per install. Remote MongoDB (`food_*`), retention prunes date rows >30d (weight never).
 
 ### Discord identity
 

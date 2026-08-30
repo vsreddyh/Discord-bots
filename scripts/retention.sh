@@ -9,8 +9,8 @@ set -euo pipefail
 # tools/ read-only, MONGODB_URI/MONGODB_DB injected from the root .env).
 # The actual policy logic lives in tools/retention.py.
 #
-#   story       no domain DB                   — no-op
-#   helldivers  static wiki DB (reference)     — no-op, never wiped
+#   story       git repo (workspace/portals)   — no-op
+#   resumes     git repo (workspace/resumes)   — no-op
 #   money       transactions autowiped when the oldest entry is >90 days old
 #   food        date-based rows pruned after 30 days; food_weight is NEVER touched
 

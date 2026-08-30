@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # `report [YYYY-MM-DD]` prints current / avg / min / max / p95 for each
 # metric from that day's samples (default: today). Sends to Discord if
-# DISCORD_BOT_TOKEN + DISCORD_HOME_CHANNEL are set (master bot channel).
+# DISCORD_BOT_TOKEN + DISCORD_HOME_CHANNEL are set (story bot channel).
 #
 # `install` / `remove` manage crontab entries: sample every minute, plus a
 # 23:59 daily report that gets posted to Discord.
@@ -22,6 +22,10 @@ osample="${TSV_DIR}/$(date +%F).tsv"
 
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
+
+# Minimal log helpers when run standalone (hermes.sh defines these itself).
+command -v warn >/dev/null 2>&1 || warn() { echo -e "\033[1;33m[WARN]\033[0m  $*" >&2; }
+command -v info >/dev/null 2>&1 || info() { echo -e "\033[0;32m[INFO]\033[0m  $*" >&2; }
 
 # ── Sample one row ─────────────────────────────────────
 sample() {
@@ -108,13 +112,13 @@ post_discord() {
     local token channel
     token="${DISCORD_BOT_TOKEN:-}"
     channel="${DISCORD_HOME_CHANNEL:-}"
-    # Cron doesn't inherit .env — pull the master-bot values if unset.
+    # Cron doesn't inherit .env — pull a bot's values if unset (prefer story).
     if [[ -z "$token" || -z "$channel" ]]; then
-        token="$(grep -E '^DISCORD_BOT_TOKEN_MASTER=' "$REPO/.env" | tail -1 | cut -d= -f2-)"
-        channel="$(grep -E '^DISCORD_HOME_CHANNEL_MASTER=' "$REPO/.env" | tail -1 | cut -d= -f2-)"
+        token="$(grep -E '^DISCORD_BOT_TOKEN_STORY=' "$REPO/.env" | tail -1 | cut -d= -f2-)"
+        channel="$(grep -E '^DISCORD_HOME_CHANNEL_STORY=' "$REPO/.env" | tail -1 | cut -d= -f2-)"
     fi
     if [[ -z "$token" || -z "$channel" ]]; then
-        warn "DISCORD_BOT_TOKEN(_MASTER) / DISCORD_HOME_CHANNEL(_MASTER) not set — skipping Discord post."
+        warn "DISCORD_BOT_TOKEN(_STORY) / DISCORD_HOME_CHANNEL(_STORY) not set — skipping Discord post."
         return 1
     fi
     curl -sf -o /dev/null -X POST \

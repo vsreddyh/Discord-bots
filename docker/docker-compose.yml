@@ -12,15 +12,13 @@ x-bot-base: &bot-base
   environment: &bot-base-environment
     HERMES_HOME: /hermes-home
     HOME: /hermes-home
-    HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
+    OPENCODE_ZEN_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
+    HERMES_API_KEY: ${OPENCODE_ZEN_API_KEY:-}
     DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
     DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
     SEARXNG_URL: http://searxng:8080
     MONGODB_URI: ${MONGODB_URI:-}
-    MONGODB_DB: ${MONGODB_DB_PREFIX}${MONGODB_DB:-hermes}
-  depends_on:
-    zen-proxy:
-      condition: service_healthy
+    MONGODB_DB: ${MONGODB_DB:-hermes}
   restart: unless-stopped
 
 services:
@@ -30,6 +28,8 @@ services:
   # ──────────────────────────────────────────────────────
   searxng:
     image: searxng/searxng:latest
+    # run as root initially to create settings.yml on first run (volume is root-owned)
+    user: "0:0"
     ports:
       - "${SEARXNG_PORT:-8888}:8080"
     environment:
@@ -43,26 +43,7 @@ services:
       - CHOWN
       - SETGID
       - SETUID
-    restart: unless-stopped
-
-  # ──────────────────────────────────────────────────────
-  # Zen Proxy — credit-aware LLM proxy (OpenCode Zen → DeepInfra fallback).
-  # Needs OPENCODE_API_KEY / DEEPINFRA_API_KEY from the root .env.
-  # ──────────────────────────────────────────────────────
-  zen-proxy:
-    build:
-      context: ../docker/proxy
-    ports:
-      - "4000:4000"
-    environment:
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
-      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY:-}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
+      - DAC_OVERRIDE
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
@@ -78,7 +59,7 @@ services:
       - "8001:8000"
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB_PREFIX}${MONGODB_DB:-hermes}
+      MONGODB_DB: ${MONGODB_DB:-hermes}
       HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
@@ -90,13 +71,18 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-# ──────────────────────────────────────────────────────
-  # Multiplexed bot gateway — ONE process serves all 6 bots.
-  # HERMES_HOME (profiles/master) is the default profile; story/helldivers/
-  # money/food/resumes are named profiles under profiles/master/profiles/. The
+  # ──────────────────────────────────────────────────────
+  # Multiplexed bot gateway — ONE container serves 4 bots + dashboard.
+  # HERMES_HOME (profiles/master) is the gateway home; story/money/
+  # food/resumes are named profiles under profiles/master/profiles/. The
   # entrypoint renders each profile's config + writes each profile's .env
   # (Discord token/channel) from these env vars, which Hermes reads as
   # per-profile secrets (never merged into one global env).
+  #
+  # HERMES_DASHBOARD=1 runs dashboard alongside gateway in the SAME
+  # container, supervised by s6 (mirrors official
+  # nousresearch/hermes-agent where HERMES_DASHBOARD=1 enables the
+  # dashboard s6 service). Port 9119 is exposed on this single service.
   #
   # ALL env comes from the single root .env (compose interpolation).
   # Deliberately NOT the whole root env (no proxy keys, and no host-oriented
@@ -104,18 +90,25 @@ services:
   # ──────────────────────────────────────────────────────
   gateway:
     <<: *bot-base
+    # s6-overlay needs to start as root to s6-setuidgid 1000:1000 for services;
+    # running the container as 1000:1000 breaks s6-applyuidgid (dashboard 9119 reset).
+    user: "0:0"
+    ports:
+      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
     volumes:
       - ../profiles/master:/hermes-home
       - ../workspace:/workspace
       - ../tools:/tools:ro
     environment:
       <<: *bot-base-environment
-      DISCORD_BOT_TOKEN_MASTER: ${DISCORD_BOT_TOKEN_MASTER:-}
-      DISCORD_HOME_CHANNEL_MASTER: ${DISCORD_HOME_CHANNEL_MASTER:-}
+      HERMES_DASHBOARD: ${HERMES_DASHBOARD:-1}
+      HERMES_DASHBOARD_HOST: ${HERMES_DASHBOARD_HOST:-0.0.0.0}
+      HERMES_DASHBOARD_PORT: ${HERMES_DASHBOARD_PORT:-9119}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
       DISCORD_BOT_TOKEN_STORY: ${DISCORD_BOT_TOKEN_STORY:-}
       DISCORD_HOME_CHANNEL_STORY: ${DISCORD_HOME_CHANNEL_STORY:-}
-      DISCORD_BOT_TOKEN_HELLDIVERS: ${DISCORD_BOT_TOKEN_HELLDIVERS:-}
-      DISCORD_HOME_CHANNEL_HELLDIVERS: ${DISCORD_HOME_CHANNEL_HELLDIVERS:-}
       DISCORD_BOT_TOKEN_MONEY: ${DISCORD_BOT_TOKEN_MONEY:-}
       DISCORD_HOME_CHANNEL_MONEY: ${DISCORD_HOME_CHANNEL_MONEY:-}
       DISCORD_BOT_TOKEN_FOOD: ${DISCORD_BOT_TOKEN_FOOD:-}
@@ -123,37 +116,6 @@ services:
       DISCORD_BOT_TOKEN_RESUMES: ${DISCORD_BOT_TOKEN_RESUMES:-}
       DISCORD_HOME_CHANNEL_RESUMES: ${DISCORD_HOME_CHANNEL_RESUMES:-}
       USDA_API_KEY: ${USDA_API_KEY:-}
-
-  # ──────────────────────────────────────────────────────
-  # Dashboard — password-protected web UI. Unified mode: HERMES_HOME is the
-  # default (master) profile and the UI lists every named profile under
-  # profiles/master/profiles/ in one dashboard.
-  # Auth (HERMES_DASHBOARD_BASIC_AUTH_*) comes from the root .env.
-  # The package ships a prebuilt web_dist, so --skip-build works without
-  # Node/npm.
-  # ──────────────────────────────────────────────────────
-  dashboard:
-    build:
-      context: ../test
-    user: "1000:1000"
-    ports:
-      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
-    volumes:
-      - ../profiles/master:/hermes-home
-      - ../tools:/tools:ro
-    environment:
-      HERMES_MODE: dashboard
-      HERMES_HOME: /hermes-home
-      HOME: /hermes-home
-      HERMES_API_KEY: ${HERMES_API_KEY:-zen-proxy}
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_MASTER:-}
-      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_MASTER:-}
-      DISCORD_ALLOW_ALL_USERS: ${DISCORD_ALLOW_ALL_USERS:-true}
-      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
-      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}
-      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
-      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
-    restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
   # Retention — one-shot data lifecycle job, run via cron
@@ -168,9 +130,26 @@ services:
       - ../tools:/tools:ro
     environment:
       MONGODB_URI: ${MONGODB_URI:-}
-      MONGODB_DB: ${MONGODB_DB_PREFIX}${MONGODB_DB:-hermes}
+      MONGODB_DB: ${MONGODB_DB:-hermes}
     entrypoint: ["python3", "/tools/retention.py"]
     restart: "no"
+
+  # ── Dev-only local MongoDB (ephemeral, HERMES_ENV=dev) ──────────
+  # Activated via compose profile `dev` (COMPOSE_PROFILES=dev, set by
+  # scripts/lib/common.sh when HERMES_ENV=dev). Prod never starts this.
+  # No volume — fully ephemeral (data lost on `down`/`restart`), which is
+  # intentional for temporary dev use.
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    profiles:
+      - dev
 
 volumes:
   searxng_data:
