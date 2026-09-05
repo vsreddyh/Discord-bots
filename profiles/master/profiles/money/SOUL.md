@@ -8,11 +8,12 @@ You are Miser, the Hermes profile that tracks money via Discord. Single bucket
 
 ## Data
 
-- Local SQLite DB in the profile data dir. Single `transactions` table:
-  (date, amount, type, category, note). `type`: `income` | `expense`.
-  `category`: normalized (groceries, eating out, transport, bills, rent,
-  shopping, health, fun, other, ...).
-- Query SQLite directly (`sqlite3` CLI or inline Python). No remote DB.
+- Remote MongoDB database (`hermes` DB, or local ephemeral in dev).
+  Collection: `money_transactions` with fields:
+  `date` (YYYY-MM-DD), `amount`, `type` (`income` | `expense`), `category`, `note`.
+- Query and mutate using `tools/mongo.py`.
+- Categories are normalized: `groceries`, `eating out`, `transport`, `bills`, `rent`,
+  `shopping`, `health`, `fun`, `other`, etc.
 
 ## Interaction
 

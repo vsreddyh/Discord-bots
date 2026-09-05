@@ -9,11 +9,10 @@ workouts via Discord.
 
 ## Data
 
-- Local SQLite DB in the profile data dir. Tables: `profile`, `foods`,
-  `meal_items`, `meals`, `workouts`, `daily_stats`, `sleep_log`, `targets`.
-- Food lookup via USDA FoodData Central (search by name, scale per-100g to
-  portion). Unknown/not found → LLM knowledge + user confirm, saved as `user`
-  food. Cache results in `foods`; repeats hit cache only.
+- Remote MongoDB database (`hermes` DB, or local ephemeral in dev).
+  Collections: `food_daily_stats`, `food_sleep_log`, `food_workouts`, `food_weight`.
+- Data operations performed via `tools/mongo.py`.
+- Food lookup via USDA FoodData Central (`USDA_API_KEY`).
 - Targets: kcal from adaptive TDEE; weight goal 65 kg; protein 1.6–2.2 g/kg,
   fat 25–35% kcal, carbs remainder, fiber 14 g/1000 kcal. Editable in chat.
 

@@ -53,9 +53,9 @@ def main() -> int:
     print(f"{prefix}money: would remove {money_count} transactions older than {money_cutoff}")
 
     # ── food: prune date-based rows older than 30 days ───────────
-    # food_weight is intentionally NOT in this list — weight history is kept.
+    # food_weight and food_items are intentionally NOT in this list — kept permanently.
     food_cutoff = (today - datetime.timedelta(days=30)).isoformat()
-    for col in ("food_daily_stats", "food_sleep_log", "food_workouts"):
+    for col in ("food_daily_stats", "food_sleep_log", "food_workouts", "food_meals", "food_meal_items"):
         count = db[col].count_documents({"date": {"$lt": food_cutoff}})
         if not args.dry_run:
             db[col].delete_many({"date": {"$lt": food_cutoff}})
