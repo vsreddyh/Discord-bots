@@ -16,11 +16,11 @@
 ## What this project is
 
 Runs **three Hermes profiles** (story, resumes, default-god) against
-OpenCode Zen directly (no proxy). Private SearXNG, ONE multiplexed Discord gateway process
-for all three profiles (Hermes `gateway.multiplex_profiles`; domain profiles are
-nested under `profiles/master/profiles/<bot>/`), a password-protected dashboard
+OpenCode Zen directly (no proxy). Private SearXNG, ONE multiplexed gateway process
+for all three profiles (Hermes `gateway.multiplex_profiles`), a password-protected dashboard
 (supervised alongside gateway via `s6`, `HERMES_DASHBOARD=1` in the same `gateway`
 container — mirrors official `nousresearch/hermes-agent`),
+a built-in OpenAI-compatible API server (:8642) for the custom Android app,
 and remote MongoDB for domain data (money, health, cookbook). **The live stack
 is fully Dockerized** — one compose file (`docker/docker-compose.yml`): searxng
 + health-api + one `gateway` container (all 3 profiles + dashboard, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
@@ -41,11 +41,9 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 ## Repo facts
 
 - ONLY the root `.env` exists (git-ignored; `.env.example` tracked). Every env
-  var for the whole stack lives there — per-bot Discord tokens/channels
-  (`DISCORD_BOT_TOKEN_<BOT>`/`DISCORD_HOME_CHANNEL_<BOT>`), proxy keys, Mongo
-   URI, dashboard auth. compose maps them into each service; there is
-  NO `profiles/*/.env`. Stale per-profile `.env` files from before the
-  consolidation are ignored by the entrypoint and can be deleted.
+  var for the whole stack lives there — API keys, Mongo
+   URI, dashboard auth, app API key. compose maps them into each service; there is
+  NO `profiles/*/.env`.
 - Docs: `README.md` = quick start; `documentation.md` = deep dive.
 - `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
   a thin Docker orchestrator over `docker/docker-compose.yml`. No host installs.
@@ -73,24 +71,16 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
    (compose otherwise looks for `.env` in the compose file's dir and every `${VAR}`
    silently falls back empty/default).
 - LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-free`) — no proxy container.
-- Discord routing: `DISCORD_ALLOW_ALL_USERS=true`, `group_sessions_per_user:
-  false` (one shared conversation per channel), `discord.require_mention: true`,
-  `discord.auto_thread: false` (inline replies, no threads), new conversation
-  via built-in `/reset` (alias `/new`).
+- App API: Hermes built-in OpenAI-compatible server on the gateway
+  (`gateway.api_server`, `:8642`, shared `API_SERVER_KEY`); one port, each app
+  tab sends its profile's model name. Verify names live via `GET /v1/models`.
 - Bot config source is `profiles/master/config.yaml.template` (gateway home,
-  not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the four
-  domain bots — nested because Hermes multiplexes named profiles under the
+  not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the three
+  domain profiles — nested because Hermes multiplexes named profiles under the
   gateway home). Templates use `${HERMES_BASE_URL}` and `${HERMES_CWD}` plus
-  `${DISCORD_HOME_CHANNEL}` (entrypoint exports per-profile channel before render).
+  `${API_SERVER_KEY}` on the gateway home.
   `test/entrypoint.sh` renders each to a git-ignored `config.yaml` at container
-  start with docker defaults: `https://opencode.ai/zen/v1` + `/workspace/<bot>`, and
-  writes each profile's `.env` (`DISCORD_BOT_TOKEN`/`DISCORD_HOME_CHANNEL`)
-  from the compose-injected vars.
-- The `hermes-god` toolset is baked into the bot image (`test/Dockerfile`
-   patches `toolsets.py` + `platforms.py` at build time) — there is NO host
-   Hermes install to patch. `HERMES_DASHBOARD=1` makes the same entrypoint run
-   `hermes dashboard` alongside `hermes gateway run` via `s6` in the same
-   container (uses the prebuilt `hermes_cli/web_dist`, no npm).
+  start with docker defaults: `https://opencode.ai/zen/v1` + `/workspace/<bot>`.
 - Dashboard binds `0.0.0.0:9119` with `HERMES_HOME=/hermes-home` (mounts
    `profiles/master`, supervised alongside gateway via `s6` when `HERMES_DASHBOARD=1`); auth via `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`/`_PASSWORD`/
    `_SECRET` in the root `.env` (a public bind requires an auth provider).
@@ -117,7 +107,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   best-effort stops it. `clean` no longer touches `~/.hermes` (no host install).
 - Migration (first Docker start after the native era): stop old native bots /
   dashboard / health-api before `./scripts/hermes.sh start`, or two
-  gateways will fight over the same Discord tokens.
+  gateways will fight over the same ports.
 - Remote MongoDB is never touched by `clean`. Creds live only in git-ignored `.env`.
 - Dev isolation = `HERMES_ENV=dev` in the root `.env` uses a temporary local
   `mongodb` container (`mongodb://mongodb:27017`, no volume, ephemeral) for

@@ -9,11 +9,9 @@ set -euo pipefail
 # self-contained — no state between runs.)
 #
 # `report [YYYY-MM-DD]` prints current / avg / min / max / p95 for each
-# metric from that day's samples (default: today). Sends to Discord if
-# DISCORD_BOT_TOKEN + DISCORD_HOME_CHANNEL are set (story bot channel).
+# metric from that day's samples (default: today).
 #
-# `install` / `remove` manage crontab entries: sample every minute, plus a
-# 23:59 daily report that gets posted to Discord.
+# `install` / `remove` manage the every-minute sampler crontab entry.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TSV_DIR="$REPO/run/sysmon"
@@ -110,37 +108,11 @@ print("\n".join(lines))
 PY
 )"
     echo "$body"
-    case "${POST_DISCORD:-0}" in
-        1|true|TRUE|True|yes|YES|Yes) post_discord "$body" ;;
-    esac
-}
-
-post_discord() {
-    local token channel
-    # Cron doesn't inherit .env — load_root_env (above) already loaded it;
-    # prefer story bot's scoped values when generic ones are unset.
-    token="${DISCORD_BOT_TOKEN:-${DISCORD_BOT_TOKEN_STORY:-}}"
-    channel="${DISCORD_HOME_CHANNEL:-${DISCORD_HOME_CHANNEL_STORY:-}}"
-    if [[ -z "$token" || -z "$channel" ]]; then
-        warn "DISCORD_BOT_TOKEN(_STORY) / DISCORD_HOME_CHANNEL(_STORY) not set — skipping Discord post."
-        return 1
-    fi
-    # Token passed via curl config on stdin (process substitution), never in
-    # argv — keeps it out of `ps` output.
-    if curl -sf -o /dev/null -X POST -K <(printf 'header = "Authorization: Bot %s"\nheader = "Content-Type: application/json"\n' "$token") \
-        -d "$(printf '{"content":%s}' "$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<<"$1")")" \
-        "https://discord.com/api/v10/channels/$channel/messages"; then
-        info "posted daily report to Discord."
-    else
-        warn "Discord post failed."
-        return 1
-    fi
 }
 
 # ── Cron management ────────────────────────────────────
 cron_lines() {
     echo "* * * * * bash $REPO/scripts/sysmon.sh record >> $REPO/run/sysmon.log 2>&1"
-    echo "59 23 * * * env POST_DISCORD=1 bash $REPO/scripts/sysmon.sh report >> $REPO/run/sysmon.log 2>&1"
 }
 
 install_cron() {
@@ -153,7 +125,7 @@ install_cron() {
             return 0
         fi
         ( crontab -l 2>/dev/null | grep -vF "sysmon.sh" || true; cron_lines ) | crontab -
-        info "sysmon cron installed: sample every minute + daily 23:59 report."
+        info "sysmon cron installed: sample every minute."
     } 9>"$REPO/run/cron.lock"
 }
 
@@ -172,7 +144,7 @@ remove_cron() {
 cmd="${1:-report}"
 case "$cmd" in
     record) mkdir -p "$TSV_DIR"; sample ;;
-    report) export POST_DISCORD="${POST_DISCORD:-0}"; stats "${2:-$(date +%F)}" ;;
+    report) stats "${2:-$(date +%F)}" ;;
     install) install_cron ;;
     remove) remove_cron ;;
     *) warn "usage: $0 {record|report [YYYY-MM-DD]|install|remove}"; exit 1 ;;

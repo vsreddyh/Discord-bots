@@ -11,11 +11,12 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 5. [Remote MongoDB & Storage Model](#remote-mongodb--storage-model)
 6. [Data Retention & Lifecycle](#data-retention--lifecycle)
 7. [Health Connect Pipeline](#health-connect-pipeline)
-8. [Hermes Dashboard & Web UI](#hermes-dashboard--web-ui)
-9. [Development Mode Isolation](#development-mode-isolation)
-10. [Configuration & Environment Reference](#configuration--environment-reference)
-11. [Security & Isolation](#security--isolation)
-12. [Extending the Stack](#extending-the-stack)
+8. [Android App API (Chat)](#android-app-api-chat)
+9. [Hermes Dashboard & Web UI](#hermes-dashboard--web-ui)
+10. [Development Mode Isolation](#development-mode-isolation)
+11. [Configuration & Environment Reference](#configuration--environment-reference)
+12. [Security & Isolation](#security--isolation)
+13. [Extending the Stack](#extending-the-stack)
 
 ---
 
@@ -32,7 +33,7 @@ The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a 
  default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
            3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-free)
-         each profile: own Discord token + workspace + secret scope
+         └── API server :8642 ──────────┤   (Android app chat backend)
 Health Gateway (Android) ──► health-api (:8001) ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
@@ -41,6 +42,7 @@ Retention ───────────────► one-shot container (c
 - **LLM Connection**: Direct HTTPS communication with OpenCode Zen (`https://opencode.ai/zen/v1`, default model `muse-spark-1.2-free`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
 - **gateway & dashboard**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles. `s6-overlay` supervises both the gateway and the dashboard process on `:9119` when `HERMES_DASHBOARD=1`.
+- **app API**: Hermes built-in OpenAI-compatible server (`gateway.api_server` in `profiles/master/config.yaml.template`) on `:8642` — the chat backend for the custom Android app (3 tabs, SSE streaming, shared `API_SERVER_KEY` bearer auth).
 - **searxng**: Self-hosted metasearch instance (`:8888`) providing local privacy-preserving search tool capabilities.
 - **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
 - **Development Isolation**: `HERMES_ENV=dev` directs all database operations to an ephemeral local `mongodb` container (`mongodb://mongodb:27017`), preventing dev writes from ever touching remote production data.
@@ -63,7 +65,7 @@ All container management is orchestrated through [`scripts/hermes.sh`](file:///h
 
 ### `init`
 1. Verifies host dependencies (docker, compose, python3, curl, cron) and installs missing requirements.
-2. Builds the shared bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile), baking in `hermes-god` and `s6-overlay`) and the `health-api` image.
+2. Builds the shared bot image ([`test/Dockerfile`](file:///home/vsreddyh/Documents/Discord-bots/test/Dockerfile), baking in `s6-overlay`) and the `health-api` image.
 3. Initializes root `.env` from `.env.example` if not already present.
 4. Copies skill files from `skills/` into each profile directory.
 5. Installs the daily data retention cron job (runs daily at 03:00).
@@ -91,15 +93,15 @@ Stops containers, wipes docker volumes (`down -v`), removes `run/`, clears rende
 
 [`profiles/master/`](file:///home/vsreddyh/Documents/Discord-bots/profiles/master) acts as the gateway root (`HERMES_HOME=/hermes-home`). The individual bot profiles are organized under `profiles/master/profiles/<bot>/`:
 
-| Profile | Discord Identity | Home Channel Env Var | Workspace & Domain Data |
-|---|---|---|---|
-| `story` | Portas-Maintainer | `DISCORD_HOME_CHANNEL_STORY` | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
-| `resumes` | Job Bot | `DISCORD_HOME_CHANNEL_RESUMES` | LaTeX CV workspace in Git repo (`workspace/resumes`, `vsreddyh/Resume`) |
-| `default` | God profile | `DISCORD_HOME_CHANNEL_DEFAULT` | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync |
+| Profile | App Tab | Workspace & Domain Data |
+|---|---|---|
+| `story` | Story | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
+| `resumes` | Resumes | LaTeX CV workspace in Git repo (`workspace/resumes`, `vsreddyh/Resume`) |
+| `default` | God | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync |
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
-- During container startup, [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh) generates per-profile `.env` files containing only the scoped `DISCORD_BOT_TOKEN` and `DISCORD_HOME_CHANNEL`.
+- During container startup, [`test/entrypoint.sh`](file:///home/vsreddyh/Documents/Discord-bots/test/entrypoint.sh) renders `config.yaml` for the gateway home and each named profile from the container env.
 - This ensures discrete credential scoping without mixing secrets across bot instances.
 
 ---
@@ -156,13 +158,27 @@ Android Health Gateway App ──POST /api/health/sync──► health-api (:800
                                                         │
                                                         ▼
                                        MongoDB: hc_days (one doc per date)
-                                                        │
-                                                        ▼
-                                       Discord summary to default home channel
 ```
 
 1. **Android Gateway** (`android/health-gateway/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
-2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <HEALTH_SYNC_TOKEN>`, upserts metrics into MongoDB, and posts an activity update to Discord.
+2. **`health-api` Endpoint** (`:8001`): Authenticates requests via `Authorization: Bearer <HEALTH_SYNC_TOKEN>` and upserts metrics into MongoDB.
+
+---
+
+## Android App API (Chat)
+
+The custom Android app (`android/health-gateway/`, 3 chat tabs + Settings) talks to Hermes's built-in OpenAI-compatible API server on the gateway (`:8642`, one port, shared `API_SERVER_KEY` bearer key):
+
+```bash
+curl http://<host>:8642/v1/models -H "Authorization: Bearer <API_SERVER_KEY>"
+curl http://<host>:8642/v1/chat/completions \
+  -H "Authorization: Bearer <API_SERVER_KEY>" -H "Content-Type: application/json" \
+  -d '{"model": "<profile-name>", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
+```
+
+- Each tab sends its profile's model name — **verify live via `GET /v1/models`**, which is the source of truth for model names under multiplex (expected: one entry per profile).
+- If multiplex serves only one model, split into 3 gateway services with per-profile `api_server` ports instead (app code is unchanged — only base URL/model mapping differs).
+- Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `API_SERVER_KEY`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---
 
@@ -191,8 +207,7 @@ All settings are configured in the single root `.env` file:
 | Variable | Required | Description |
 |---|---|---|
 | `OPENCODE_ZEN_API_KEY` | **Yes** | API key for OpenCode Zen direct connection |
-| `DISCORD_BOT_TOKEN_<BOT>` | **Yes** | Individual Discord bot token (`STORY`, `RESUMES`, `DEFAULT`) |
-| `DISCORD_HOME_CHANNEL_<BOT>` | **Yes** | Home channel ID for each bot |
+| `API_SERVER_KEY` | **Yes** | Shared bearer key for the Android app chat tabs (`:8642`) |
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
 | `HERMES_ENV` | No | Set to `dev` for local ephemeral MongoDB container |
@@ -219,8 +234,7 @@ All settings are configured in the single root `.env` file:
 1. Create a plan in `profile-plans/<bot>-plan.md`.
 2. Create profile directory `profiles/master/profiles/<bot>/` with `config.yaml.template`, `SOUL.md`, and skills.
 3. Add the bot identifier to the `BOTS` array in `scripts/hermes.sh`.
-4. Define `DISCORD_BOT_TOKEN_<BOT>` and `DISCORD_HOME_CHANNEL_<BOT>` in `.env` and `docker/docker-compose.yml`.
-5. Rebuild and restart the gateway container:
+4. Rebuild and restart the gateway container:
    ```bash
    ./scripts/hermes.sh restart
    ```

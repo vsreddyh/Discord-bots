@@ -296,8 +296,9 @@ install_retention_cron
 
     echo
     info "Initialization complete."
-    echo "  Next: edit .env with real tokens (DISCORD_BOT_TOKEN_*, Mongo URI), then ./scripts/hermes.sh start"
+    echo "  Next: edit .env with real keys (OPENCODE_ZEN_API_KEY, API_SERVER_KEY, Mongo URI), then ./scripts/hermes.sh start"
     echo "  Access: dashboard at http://<host>:9119  (set HERMES_DASHBOARD_BASIC_AUTH_* in .env)"
+    echo "  Access: app API at http://<host>:8642  (bearer API_SERVER_KEY)"
     echo "  Access: health-api at http://<host>:8001"
 }
 
@@ -311,7 +312,7 @@ legacy_native_bots() {
         [[ -f "$pf" ]] || continue
         if kill -0 "$(cat "$pf")" 2>/dev/null; then
             warn "Stale NATIVE bot process found: $pf (PID $(cat "$pf"))."
-            warn "  Stop it before starting the Docker stack or Discord tokens will conflict."
+            warn "  Stop it before starting the Docker stack or ports will conflict."
             found=1
         fi
     done

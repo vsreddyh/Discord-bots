@@ -4,14 +4,12 @@ set -euo pipefail
 : "${HERMES_HOME:=/hermes-home}"
 
 # NOTE: env is injected entirely by docker-compose (from the single root
-# .env). There is no per-profile .env to source anymore.
+# .env). There are no per-profile .env files.
 #
 # Multiplex layout: HERMES_HOME is the gateway home (profiles/master) and
 # every bot is a NAMED profile under $HERMES_HOME/profiles/<name>.
 # compose mounts ../profiles/master:/hermes-home and ../workspace:/workspace,
-# so this renders config.yaml for the gateway home + each named profile and
-# writes each named profile's .env (Discord token/channel in the per-profile-
-# secret scope Hermes reads).
+# so this renders config.yaml for the gateway home + each named profile.
 #
 # With s6-overlay, HERMES_DASHBOARD=1 runs dashboard alongside gateway in
 # the SAME container (mirrors official nousresearch/hermes-agent image:
@@ -33,8 +31,8 @@ export MONGODB_DB="${MONGODB_DB:-hermes}"
 
 render_config() {
     # Render one profile's $1/config.yaml.template → $1/config.yaml.
-    # Env vars come from the process env; each profile's token/channel are
-    # already present as DISCORD_BOT_TOKEN / DISCORD_HOME_CHANNEL.
+    # Env vars come from the process env (injected by docker-compose
+    # from the single root .env).
     local home="$1" t c
     t="$home/config.yaml.template"
     c="$home/config.yaml"
@@ -53,26 +51,6 @@ PY
     info "rendered $c"
 }
 
-write_profile_env() {
-    # Write one profile's .env with its own Discord creds. $1 = home,
-    # $2 = profile name (story/resumes/default).
-    local home="$1" name="$2" envf
-    envf="$home/.env"
-    # Mapping is deterministic: DISCORD_BOT_TOKEN_<NAME upper> in the
-    # container env (from root .env via compose) → DISCORD_BOT_TOKEN here.
-    local tok ch upper tokv chv
-    upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
-    tokv="DISCORD_BOT_TOKEN_${upper}"
-    chv="DISCORD_HOME_CHANNEL_${upper}"
-    tok="${!tokv:-}"
-    ch="${!chv:-}"
-    {
-        printf 'DISCORD_BOT_TOKEN=%s\n' "$tok"
-        printf 'DISCORD_HOME_CHANNEL=%s\n' "$ch"
-    } > "$envf"
-    info "wrote $envf"
-}
-
 warning() { echo "[entrypoint] WARN: $*" >&2; }
 info() { echo "[entrypoint] $*"; }
 
@@ -85,19 +63,11 @@ do_render() {
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
         name="$(basename "$home")"
-        upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
-        tokv="DISCORD_BOT_TOKEN_${upper}"
-        chv="DISCORD_HOME_CHANNEL_${upper}"
-        # Export per-profile channel so ${DISCORD_HOME_CHANNEL} in the template
-        # renders correctly for named profiles (was previously hardcoded).
-        export DISCORD_HOME_CHANNEL="${!chv:-}"
-        export DISCORD_BOT_TOKEN="${!tokv:-}"
         if [[ "$name" == "default" ]]; then
             HERMES_CWD="/workspace" render_config "$home"
         else
             HERMES_CWD="/workspace/$name" render_config "$home"
         fi
-        write_profile_env "$home" "$name"
     done
 
     export HERMES_HOME

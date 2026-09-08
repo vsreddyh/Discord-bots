@@ -1,6 +1,6 @@
-# opencode-remote
+# Hermes Android stack
 
-Fully Dockerized Discord bot stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes private SearXNG search, **one multiplexed Discord gateway container** with an embedded password-protected dashboard, Android Health Connect sync via `health-api`, and remote MongoDB persistence.
+Fully Dockerized agent stack running **three Hermes profiles** (story, resumes, default-god) direct against OpenCode Zen (`https://opencode.ai/zen/v1`). Includes private SearXNG search, **one multiplexed gateway container** with an embedded password-protected dashboard and a built-in OpenAI-compatible API server for the custom **Android app** (3 chat tabs + Settings), Android Health Connect sync via `health-api`, and remote MongoDB persistence.
 
 ---
 
@@ -14,8 +14,8 @@ Fully Dockerized Discord bot stack running **three Hermes profiles** (story, res
   resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
   default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
             3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
-         └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-free)
-         each profile: own Discord token + workspace + secret scope
+          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-free)
+          └── API server :8642 ──────────┤   (Android app chat backend)
 Health Gateway (Android) ──► health-api (:8001) ──► MongoDB
 Hermes Dashboard ────────► 0.0.0.0:9119 via gateway (s6, basic auth, unified)
 Retention ───────────────► one-shot container (cron 03:00 / on start)
@@ -23,7 +23,7 @@ Retention ───────────────► one-shot container (c
 
 | Service | Container / Process | Published Port | Purpose |
 |---|---|---|---|
-| `gateway` | `gateway` container (`s6` supervised) | `9119` (dashboard) | Multiplexed Discord gateway for all 3 profiles + embedded Web UI dashboard |
+| `gateway` | `gateway` container (`s6` supervised) | `9119` (dashboard), `8642` (app API) | Multiplexed gateway for all 3 profiles + embedded Web UI dashboard + OpenAI-compatible API server |
 | `health-api` | `health-api` container | `8001` | Ingests Health Connect sync data from Android and persists to MongoDB |
 | `searxng` | `searxng` container | `8888` | Private search backend for web search tool |
 | `retention` | `retention` container (one-shot) | — | Data retention policy runner (`tools/retention.py`) |
@@ -34,11 +34,11 @@ Retention ───────────────► one-shot container (c
 
 ## Profiles & Domains
 
-| Profile | Bot Name | Channel Secret Key | Purpose & Storage | Data Retention Policy |
-|---|---|---|---|---|
-| `story` | Portas-Maintainer | `DISCORD_HOME_CHANNEL_STORY` | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
-| `resumes` | Job Bot | `DISCORD_HOME_CHANNEL_RESUMES` | LaTeX resume tailoring & cover letters in Git repo (`workspace/resumes`, `vsreddyh/Resume`) | No DB retention (Git tracked) |
-| `default` | God profile | `DISCORD_HOME_CHANNEL_DEFAULT` | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
+| Profile | App Tab | Purpose & Storage | Data Retention Policy |
+|---|---|---|---|
+| `story` | Story | Mana Revolution lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) | No DB retention (Git tracked) |
+| `resumes` | Resumes | LaTeX resume tailoring & cover letters in Git repo (`workspace/resumes`, `vsreddyh/Resume`) | No DB retention (Git tracked) |
+| `default` | God | Money (`money_transactions`), cookbook (`cookbook_*`, permanent), health tracking (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync via `health-api` | Money >90d autowipe; `hc_meals`/`hc_days` >30d; `hc_weight` + `cookbook_*` **never pruned** |
 
 ---
 
@@ -62,19 +62,17 @@ Retention ───────────────► one-shot container (c
 
 ### Required External Services & API Keys
 - **OpenCode Zen API Key**: `OPENCODE_ZEN_API_KEY` from [opencode.ai](https://opencode.ai) (model: `muse-spark-1.2-free`).
-- **Discord Bot Tokens & Channels**: 3 application bot tokens with Message Content Intent enabled + Home Channel IDs:
-  - `DISCORD_BOT_TOKEN_STORY` / `DISCORD_HOME_CHANNEL_STORY`
-  - `DISCORD_BOT_TOKEN_RESUMES` / `DISCORD_HOME_CHANNEL_RESUMES`
-  - `DISCORD_BOT_TOKEN_DEFAULT` / `DISCORD_HOME_CHANNEL_DEFAULT` (god profile: money/cookbook/health MCPs)
+- **Android App API Key**: `API_SERVER_KEY` (shared bearer key for all 3 chat tabs; generate with `openssl rand -hex 32`). Verify live model names via `GET /v1/models`.
 - **MongoDB Cluster**: MongoDB connection URI (`MONGODB_URI`) and database name (`MONGODB_DB`, default `hermes`). (In dev mode, `HERMES_ENV=dev` provides an ephemeral local single-node replica set instead.)
 - **Health Sync Secret**: `HEALTH_SYNC_TOKEN` Bearer token matching the Android Health Gateway app. (Retired: `USDA_API_KEY` — health-check takes user-supplied macros only.)
 - **Dashboard Web Credentials**: `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` (32+ chars).
 
 ### Network & Firewall Ports
 - Port `9119/tcp` (Hermes Dashboard) — Inbound access restricted or behind reverse proxy with Basic Auth.
+- Port `8642/tcp` (App API server) — Inbound HTTP access for the Android app chat tabs (bearer key auth).
 - Port `8001/tcp` (Health API) — Inbound HTTP access for Android sync POST requests.
 - Port `8888/tcp` (SearXNG) — Internal compose network (optional host publish).
-- Outbound HTTPS (`443/tcp`) for Discord API/Gateway, OpenCode Zen (`opencode.ai`), MongoDB Atlas, and GitHub.
+- Outbound HTTPS (`443/tcp`) for OpenCode Zen (`opencode.ai`), MongoDB Atlas, and GitHub.
 
 ---
 
@@ -132,7 +130,7 @@ Setting `HERMES_ENV=dev` in the root `.env` switches the stack to an isolated de
 ## Health Connect Ingestion
 
 1. **Android App** (`android/health-gateway/`): Reads steps, calories, sleep stages, and workout sessions from Health Connect. Syncs periodically or manually to `POST /api/health/sync` with Bearer auth (`HEALTH_SYNC_TOKEN`).
-2. **`health-api` Service**: Validates auth, upserts one doc per date in `hc_days` (steps, active kcal, sleep hours, workouts — same shape the health-check MCP writes), and broadcasts an instant update to the default Discord channel.
+2. **`health-api` Service**: Validates auth, upserts one doc per date in `hc_days` (steps, active kcal, sleep hours, workouts — same shape the health-check MCP writes).
 
 ---
 

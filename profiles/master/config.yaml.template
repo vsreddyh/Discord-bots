@@ -9,6 +9,15 @@ model:
 # a bot itself — it only hosts the multiplexed gateway.
 gateway:
   multiplex_profiles: true
+  # Built-in OpenAI-compatible HTTP API for the custom Android app
+  # (3 chat tabs + Settings). One port; each tab sends its profile's
+  # model name (see GET /v1/models to confirm names under multiplex).
+  # Key is required — rendered from API_SERVER_KEY in the root .env.
+  api_server:
+    enabled: true
+    host: 0.0.0.0
+    port: 8642
+    key: ${API_SERVER_KEY}
 
 fallback_providers:
   - provider: deepinfra
@@ -124,22 +133,9 @@ onboarding:
 
 group_sessions_per_user: false
 
-# Gateway home has no Discord bot; named profiles own their channels.
-discord:
-  require_mention: true
-  auto_thread: false
-  reactions: true
-  voice_fx:
-    enabled: true
-    ambient_enabled: true
-    ack_enabled: true
-  channel_skill_bindings: []
-
 platform_toolsets:
   cli:
     - file
     - terminal
-  discord:
-    - hermes-god
 
 _config_version: 33

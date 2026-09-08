@@ -18,7 +18,6 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -189,47 +188,7 @@ async def sync(payload: HealthSyncPayload, authorization: str | None = Header(No
         len(payload.sleep), len(payload.workouts),
     )
 
-    await _post_discord_update(payload)
-
     return {"status": "ok", "synced_at": synced_at}
-
-
-async def _post_discord_update(payload: HealthSyncPayload) -> None:
-    """Post a summary to the bot's Discord home channel (best-effort).
-
-    Reads DISCORD_BOT_TOKEN / DISCORD_HOME_CHANNEL from the environment.
-    Failures are logged, never surfaced to the Android app (2xx already sent).
-    """
-    token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-    channel = os.environ.get("DISCORD_HOME_CHANNEL", "").strip()
-    if not token or not channel:
-        logger.info("DISCORD_BOT_TOKEN / DISCORD_HOME_CHANNEL not set — skipping Discord post")
-        return
-
-    lines = [":watch: **Health sync received**"]
-    if payload.steps is not None:
-        lines.append(f"Steps: {payload.steps:,}")
-    if payload.activeCaloriesKcal is not None:
-        lines.append(f"Active calories: {payload.activeCaloriesKcal:.0f} kcal")
-    for s in payload.sleep:
-        lines.append(f"Sleep: {s.totalMinutes / 60:.1f} h ({s.startIso} → {s.endIso})")
-    for w in payload.workouts:
-        dist = f", {w.distanceMeters:.0f} m" if w.distanceMeters is not None else ""
-        lines.append(f"Workout: {w.title} ({w.type}{dist})")
-    if len(lines) == 1:
-        lines.append("No health data yet.")
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"https://discord.com/api/v10/channels/{channel}/messages",
-                headers={"Authorization": f"Bot {token}"},
-                json={"content": "\n".join(lines)},
-            )
-        if resp.status_code >= 400:
-            logger.warning("Discord post failed: HTTP %d %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        logger.warning("Discord post failed: %s", e)
 
 
 def _minutes_between(start_iso: str, end_iso: str) -> int | None:

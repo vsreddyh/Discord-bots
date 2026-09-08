@@ -1,14 +1,14 @@
-# VPS sizing — 4-bot Hermes stack (Dockerized)
+# VPS sizing — 3-profile Hermes stack (Dockerized)
 
-Fully Dockerized stack: four Hermes bots + dashboard in **one multiplexed gateway** (`HERMES_DASHBOARD=1` via `s6`) + searxng + health-api + retention.
+Fully Dockerized stack: three Hermes profiles + dashboard + app API server in **one multiplexed gateway** (`HERMES_DASHBOARD=1` via `s6`) + searxng + health-api + retention.
 MongoDB stays **remote** (Atlas) — no Mongo container or storage counted below.
 
 **Key fact: no LLM inference happens on this box.** OpenCode Zen runs the models, the
-bots just stream text. Bots are I/O-bound (they wait on Discord + the network), so CPU and RAM
+agents just stream text. Agents are I/O-bound (they wait on the app API + the network), so CPU and RAM
 stay modest. No GPU needed.
 
-Numbers below are **measured** on a running stack (idle bots), not guessed. Concurrency tiers =
-number of Hermes agents running at the same time (max 4, one single-user session per bot).
+Numbers below are **measured** on a running stack (idle agents), not guessed. Concurrency tiers =
+number of Hermes agents running at the same time (max 3, one single-user session per profile).
 
 | Tier | RAM | CPU | Disk | Network |
 |---|---|---|---|---|
@@ -71,7 +71,7 @@ Measured (`docker system df` + repo `du`), not guessed:
 
 ## Network
 
-- Discord WebSocket + REST and LLM text streaming are small; **latency matters, bandwidth barely does**.
+- App API (HTTP + SSE) and LLM text streaming are small; **latency matters, bandwidth barely does**.
 - **100 Mbps is enough for every tier.** Only pay for more if the provider bundles it at no cost.
 
 ## Access
