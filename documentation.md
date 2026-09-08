@@ -21,16 +21,16 @@ Deep dive into every component of `opencode-remote`. For a fast start, refer to 
 
 ## System Architecture
 
-The stack runs **four Hermes bots** (`story`, `money`, `food`, `resumes`), a health sync API, an embedded web dashboard, and a scheduled retention job — **fully in Docker**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
+The stack runs **three Hermes profiles** (`story`, `resumes`, `default`-god), a health sync API, an embedded web dashboard, and a scheduled retention job — **fully in Docker**. Everything is defined in a single Compose file ([`docker/docker-compose.yml`](file:///home/vsreddyh/Documents/Discord-bots/docker/docker-compose.yml)).
 
 ```
-                               Remote MongoDB (money, food)
+                               Remote MongoDB (money, health, cookbook)
                                             ▲
                              Docker containers
  story ──┐               │        ┌──── SearXNG (:8888)
- money ──┤ ONE Gateway   │ HERMES_HOME=  ▼
- food ───┤ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
- resumes ┘  4 profiles)  │  (gateway +  │  (https://opencode.ai/zen/v1)
+ resumes ┤ ONE Gateway   │ HERMES_HOME=  ▼
+ default ┘ (multiplexed  │ /hermes-home │   OpenCode Zen Direct
+           3 profiles)   │  (gateway +  │  (https://opencode.ai/zen/v1)
          └── HERMES_DASHBOARD=1 via s6 ─┤   (model: muse-spark-1.2-free)
          each profile: own Discord token + workspace + secret scope
 Health Gateway (Android) ──► health-api (:8001) ──► MongoDB
@@ -40,7 +40,7 @@ Retention ───────────────► one-shot container (c
 
 - **LLM Connection**: Direct HTTPS communication with OpenCode Zen (`https://opencode.ai/zen/v1`, default model `muse-spark-1.2-free`).
 - **health-api**: FastAPI sync endpoint ([`docker/health-api/main.py`](file:///home/vsreddyh/Documents/Discord-bots/docker/health-api/main.py)) on port `:8001`, writing Health Connect metrics to MongoDB.
-- **gateway & dashboard**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all four profiles. `s6-overlay` supervises both the gateway and the dashboard process on `:9119` when `HERMES_DASHBOARD=1`.
+- **gateway & dashboard**: Single multiplexed `hermes gateway run` container (`gateway.multiplex_profiles: true`) serving all three profiles. `s6-overlay` supervises both the gateway and the dashboard process on `:9119` when `HERMES_DASHBOARD=1`.
 - **searxng**: Self-hosted metasearch instance (`:8888`) providing local privacy-preserving search tool capabilities.
 - **retention**: One-shot retention job executing [`tools/retention.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/retention.py) via cron or on stack start.
 - **Development Isolation**: `HERMES_ENV=dev` directs all database operations to an ephemeral local `mongodb` container (`mongodb://mongodb:27017`), preventing dev writes from ever touching remote production data.
@@ -94,9 +94,8 @@ Stops containers, wipes docker volumes (`down -v`), removes `run/`, clears rende
 | Profile | Discord Identity | Home Channel Env Var | Workspace & Domain Data |
 |---|---|---|---|
 | `story` | Portas-Maintainer | `DISCORD_HOME_CHANNEL_STORY` | Lore vault in Git repo (`workspace/portals`, `vsreddyh/portals`) |
-| `money` | Miser | `DISCORD_HOME_CHANNEL_MONEY` | MongoDB collection `money_transactions` |
-| `food` | Saitama | `DISCORD_HOME_CHANNEL_FOOD` | MongoDB collections `food_daily_stats`, `food_sleep_log`, `food_workouts`, `food_weight` |
 | `resumes` | Job Bot | `DISCORD_HOME_CHANNEL_RESUMES` | LaTeX CV workspace in Git repo (`workspace/resumes`, `vsreddyh/Resume`) |
+| `default` | God profile | `DISCORD_HOME_CHANNEL_DEFAULT` | Money (`money_transactions`), cookbook (`cookbook_*`), health (`hc_meals`/`hc_days`/`hc_weight`) + Health Connect sync |
 
 ### Environment & Token Injection
 - All tokens and channel IDs reside in the root `.env`.
@@ -107,23 +106,25 @@ Stops containers, wipes docker volumes (`down -v`), removes `run/`, clears rende
 
 ## Remote MongoDB & Storage Model
 
-Domain data for `money` and `food` bots is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
+Domain data for `money`, `health-check`, and `cookbook` is managed in MongoDB (default database: `hermes`, configurable via `MONGODB_DB`):
 
 | Collection | Associated Bot | Schema / Keys |
 |---|---|---|
 | `money_transactions` | Money | `date` (YYYY-MM-DD), `amount` (float), `type` (income\|expense), `category` (normalized string), `note` (string) |
-| `food_daily_stats` | Food / Health Sync | `date` (YYYY-MM-DD, primary lookup key), `steps` (int), `active_calories` (float), `synced_at` (ISO timestamp) |
-| `food_sleep_log` | Food / Health Sync | `date` (YYYY-MM-DD), `sleep_start` (ISO timestamp, deduplication key), `wake_time` (ISO timestamp), `hours` (float), `synced_at` (ISO timestamp) |
-| `food_workouts` | Food / Health Sync | `date` (YYYY-MM-DD), `type` (string), `duration` (minutes, deduped on date+type+duration), `notes` (string), `synced_at` (ISO timestamp) |
-| `food_weight` | Food | `date` (YYYY-MM-DD), `weight_kg` (float) — **exempt from retention pruning** |
+| `hc_meals` | Health-check | `date` (YYYY-MM-DD), `items[{name, qty?, kcal, protein, carbs, fat, fiber}]`, `totals` (computed), `createdAt` |
+| `hc_days` | Health-check / Health Sync | `date` (YYYY-MM-DD, unique), `steps` (int), `active_kcal` (float), `sleep_hours` (float), `workouts[{type, minutes, kcal}]`, `updatedAt` |
+| `hc_weight` | Health-check | `date` (YYYY-MM-DD, unique), `kg` (float) — **exempt from retention pruning** |
+| `cookbook_ingredients` | Cookbook | `name` (unique), `note`, `createdAt` — **permanent** |
+| `cookbook_recipes` | Cookbook | `name` (unique), `servings`, per-serving `kcal/protein_g/carbs_g/fat_g/fiber_g`, `quantities[{ingredient_id, name, qty}]` — **permanent** |
+| `cookbook_cook_log` | Cookbook | `recipe_id`, `date`, `cooking_note`, `aftertaste_note` — **permanent** |
 
 ### Database Helper CLI
 Bots and scripts interact with MongoDB using [`tools/mongo.py`](file:///home/vsreddyh/Documents/Discord-bots/tools/mongo.py):
 
 ```bash
 python3 tools/mongo.py count money_transactions '{"type":"expense"}'
-python3 tools/mongo.py insert food_weight '{"date":"2026-08-08","weight_kg":63.2}'
-python3 tools/mongo.py upsert food_daily_stats '{"date":"2026-08-08"}' '{"steps":8452}'
+python3 tools/mongo.py insert hc_weight '{"date":"2026-08-08","kg":63.2}'
+python3 tools/mongo.py upsert hc_days '{"date":"2026-08-08"}' '{"steps":8452}'
 ```
 
 ---
@@ -135,10 +136,10 @@ Automated data pruning is executed by [`tools/retention.py`](file:///home/vsredd
 | Target | Retention Window | Action |
 |---|---|---|
 | `money_transactions` | > 90 days | Autowiped when `date < today - 90d` |
-| `food_daily_stats` | > 30 days | Pruned when `date < today - 30d` |
-| `food_sleep_log` | > 30 days | Pruned when `date < today - 30d` |
-| `food_workouts` | > 30 days | Pruned when `date < today - 30d` |
-| `food_weight` | Permanent | **Never pruned** |
+| `hc_meals` | > 30 days | Pruned when `date < today - 30d` |
+| `hc_days` | > 30 days | Pruned when `date < today - 30d` |
+| `hc_weight` | Permanent | **Never pruned** |
+| `cookbook_*` | Permanent | **Never pruned** |
 | `story` / `resumes` | Git history | No database retention operations |
 
 Run manual dry-runs via:
@@ -154,10 +155,10 @@ Run manual dry-runs via:
 Android Health Gateway App ──POST /api/health/sync──► health-api (:8001)
                                                         │
                                                         ▼
-                                       MongoDB: food_daily_stats / food_sleep_log / food_workouts
+                                       MongoDB: hc_days (one doc per date)
                                                         │
                                                         ▼
-                                       Discord summary to food home channel
+                                       Discord summary to default home channel
 ```
 
 1. **Android Gateway** (`android/health-gateway/`): Built with Jetpack Compose & Health Connect SDK 1.1.0. Backfills 30 days on initial setup and runs hourly background syncs.
@@ -170,14 +171,14 @@ Android Health Gateway App ──POST /api/health/sync──► health-api (:800
 - **Supervision**: Supervised via `s6-overlay` in the `gateway` container when `HERMES_DASHBOARD=1`.
 - **Binding**: Exposed on `0.0.0.0:9119`.
 - **Authentication**: Uses basic HTTP authentication configured via `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET` in `.env`.
-- **Unified Overview**: Displays runtime state, active sessions, and configuration for all four multiplexed bot profiles.
+- **Unified Overview**: Displays runtime state, active sessions, and configuration for all three multiplexed bot profiles.
 
 ---
 
 ## Development Mode Isolation
 
 Setting `HERMES_ENV=dev` enables isolated development without impacting production databases:
-- Activates the `dev` Compose profile, launching an ephemeral `mongo:7` container (`mongodb://mongodb:27017`, no volume).
+- Activates the `dev` Compose profile, launching an ephemeral `mongo:7` container (`mongodb://mongodb:27017`, no volume) as a single-node replica set (`rs0`, via the `mongodb-init` one-shot) so transactions behave like prod.
 - Gateway, `health-api`, and retention automatically target the local MongoDB instance.
 - Tearing down the container clears dev data completely.
 
@@ -190,7 +191,7 @@ All settings are configured in the single root `.env` file:
 | Variable | Required | Description |
 |---|---|---|
 | `OPENCODE_ZEN_API_KEY` | **Yes** | API key for OpenCode Zen direct connection |
-| `DISCORD_BOT_TOKEN_<BOT>` | **Yes** | Individual Discord bot token (`STORY`, `MONEY`, `FOOD`, `RESUMES`) |
+| `DISCORD_BOT_TOKEN_<BOT>` | **Yes** | Individual Discord bot token (`STORY`, `RESUMES`, `DEFAULT`) |
 | `DISCORD_HOME_CHANNEL_<BOT>` | **Yes** | Home channel ID for each bot |
 | `MONGODB_URI` | **Yes** | Remote MongoDB connection string (used in prod) |
 | `MONGODB_DB` | No | Target MongoDB database name (default: `hermes`) |
@@ -199,7 +200,6 @@ All settings are configured in the single root `.env` file:
 | `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` | For Dashboard | Dashboard login username (default: `admin`) |
 | `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` | For Dashboard | Dashboard login password |
 | `HERMES_DASHBOARD_BASIC_AUTH_SECRET` | For Dashboard | Stable token signing key (32+ bytes recommended) |
-| `USDA_API_KEY` | For Food | USDA FoodData Central API key |
 | `SEARXNG_SECRET_KEY` | No | Secret key for SearXNG instance |
 
 ---

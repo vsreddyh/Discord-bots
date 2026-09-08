@@ -4,8 +4,8 @@ model:
   base_url: ${HERMES_BASE_URL}
   api_key: ${OPENCODE_ZEN_API_KEY}
 
-# Gateway home: multiplex host for the 4 named profiles under
-# HERMES_HOME/profiles/ (story, money, food, resumes). This profile is NOT
+# Gateway home: multiplex host for the named profiles under
+# HERMES_HOME/profiles/ (story, resumes, default-god). This profile is NOT
 # a bot itself — it only hosts the multiplexed gateway.
 gateway:
   multiplex_profiles: true

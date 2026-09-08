@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remote-MongoDB helper for the Hermes bots (money, food).
+"""Remote-MongoDB helper for the Hermes bots (money, health-check, cookbook).
 
 Usage:
   mongo.py get <collection> [filter-json]
@@ -17,10 +17,10 @@ Environment:
 
 Collection conventions (stable — retention.sh depends on them):
   money_transactions                 money bot
-  food_daily_stats / food_sleep_log /
-  food_workouts / food_weight /
-  food_meals / food_meal_items /
-  food_items                         food bot (weight/foods are NEVER pruned)
+  hc_meals / hc_days / hc_weight     health-check bot (weight is NEVER pruned)
+  cookbook_ingredients /
+  cookbook_recipes / cookbook_cook_log
+                                     cookbook bot (permanent, never pruned)
 
 Date convention: store a `date` field as "YYYY-MM-DD" or a full ISO-8601
 string. Both compare lexicographically, which is what retention.sh relies on.

@@ -6,9 +6,32 @@
 REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 # Load the single root .env into the shell environment (no per-profile .env).
+# NOTE: parsed, never sourced — sourcing would execute $(...)/backticks in
+# values as shell code. Only plain `KEY=value` lines are accepted (optional
+# leading `export`, single/double-quoted values unquoted); everything else
+# (comments, blank lines, multiline values, inline comments) is skipped.
 load_root_env() {
     if [[ -f "$REPO/.env" ]]; then
-        set -a; source "$REPO/.env"; set +a
+        local line key val
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            # trim leading/trailing whitespace
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+            line="${line#export }"
+            line="${line#"${line%%[![:space:]]*}"}"
+            [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+            # unquote matching single/double quotes
+            if [[ "${#val}" -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
+                val="${val:1:-1}"
+            elif [[ "${#val}" -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
+                val="${val:1:-1}"
+            fi
+            printf -v "$key" '%s' "$val"
+            export "$key"
+        done < "$REPO/.env"
     fi
     # Dev isolation: HERMES_ENV=dev uses a temporary local MongoDB container
     # (mongodb:27017) instead of the remote Atlas cluster. Prod/unset uses

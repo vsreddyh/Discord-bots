@@ -15,22 +15,22 @@
 
 ## What this project is
 
-Runs **four Hermes bots** (story, money, food, resumes) against
+Runs **three Hermes profiles** (story, resumes, default-god) against
 OpenCode Zen directly (no proxy). Private SearXNG, ONE multiplexed Discord gateway process
-for all four bots (Hermes `gateway.multiplex_profiles`; domain profiles are
+for all three profiles (Hermes `gateway.multiplex_profiles`; domain profiles are
 nested under `profiles/master/profiles/<bot>/`), a password-protected dashboard
 (supervised alongside gateway via `s6`, `HERMES_DASHBOARD=1` in the same `gateway`
 container — mirrors official `nousresearch/hermes-agent`),
-and remote MongoDB for domain data (money, food). **The live stack
+and remote MongoDB for domain data (money, health, cookbook). **The live stack
 is fully Dockerized** — one compose file (`docker/docker-compose.yml`): searxng
-+ health-api + one `gateway` container (all 4 bots + dashboard, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
++ health-api + one `gateway` container (all 3 profiles + dashboard, direct to `https://opencode.ai/zen/v1`, `s6` supervised) +
 a one-shot retention job (plus ephemeral `mongodb` in dev). Development runs the SAME single compose file;
 `HERMES_ENV=dev` in the root `.env` switches every data consumer to a temporary
 local `mongodb` container (`mongodb://mongodb:27017`, no volume, ephemeral).
 No host Hermes install, no native processes.
 
 ```
-story+money+food+resumes
+story+resumes+default
    └─► ONE docker `gateway` container (HERMES_HOME=/hermes-home = profiles/master, HERMES_DASHBOARD=1 via s6)
         └─► OpenCode Zen direct (https://opencode.ai/zen/v1, model muse-spark-1.2-free)
 searxng (:8888)  •  health-api (:8001)  •  dashboard (:9119, password, s6 alongside gateway)
@@ -43,7 +43,7 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - ONLY the root `.env` exists (git-ignored; `.env.example` tracked). Every env
   var for the whole stack lives there — per-bot Discord tokens/channels
   (`DISCORD_BOT_TOKEN_<BOT>`/`DISCORD_HOME_CHANNEL_<BOT>`), proxy keys, Mongo
-  URI, dashboard auth, USDA key. compose maps them into each service; there is
+   URI, dashboard auth. compose maps them into each service; there is
   NO `profiles/*/.env`. Stale per-profile `.env` files from before the
   consolidation are ignored by the entrypoint and can be deleted.
 - Docs: `README.md` = quick start; `documentation.md` = deep dive.
@@ -54,8 +54,9 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
   opencode with `HERMES_NO_OPENCODE=1`. Dashboard (:9119) and health-api (:8001) bind `0.0.0.0` inside Docker.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`docker compose run --rm retention` → `tools/retention.py`); cron daily 03:00
-  installed by `init`, also runs on every `start`. money wipes transactions >90d;
-  food prunes date rows >30d (never `food_weight`); story/resumes (git repos) are no-ops.
+   installed by `init`, also runs on every `start`. money wipes transactions >90d;
+   health-check prunes `hc_meals`/`hc_days` >30d (never `hc_weight`); cookbook is
+   permanent; story/resumes (git repos) are no-ops.
 - `tools/mongo.py` = shared pymongo CLI; `tools/retention.py` = data lifecycle.
   `MONGODB_URI`/`MONGODB_DB` in root `.env` for prod; `HERMES_ENV=dev` switches
   to ephemeral local `mongodb` container (`mongodb://mongodb:27017`, no volume)

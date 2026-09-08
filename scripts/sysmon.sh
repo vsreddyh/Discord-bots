@@ -18,10 +18,9 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TSV_DIR="$REPO/run/sysmon"
 
-osample="${TSV_DIR}/$(date +%F).tsv"
-
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
+load_root_env
 
 # Minimal log helpers when run standalone (hermes.sh defines these itself).
 command -v warn >/dev/null 2>&1 || warn() { echo -e "\033[1;33m[WARN]\033[0m  $*" >&2; }
@@ -48,6 +47,7 @@ sample() {
     fi
 
     read -r total_mem free_mem < <(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{print t, a}' /proc/meminfo)
+    total_mem="${total_mem:-0}"; free_mem="${free_mem:-0}"
     if (( total_mem > 0 )); then
         mem_pct=$(( (total_mem - free_mem) * 100 / total_mem ))
         used_mem=$(( (total_mem - free_mem) / 1024 ))
@@ -56,6 +56,7 @@ sample() {
     fi
 
     read -r swap_total swap_free < <(awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END{print t, f}' /proc/meminfo)
+    swap_total="${swap_total:-0}"; swap_free="${swap_free:-0}"
     if (( swap_total > 0 )); then
         swap_pct=$(( (swap_total - swap_free) * 100 / swap_total ))
     else
@@ -65,7 +66,13 @@ sample() {
     disk_pct="$(df / --output=pcent 2>/dev/null | tail -1 | tr -dc '0-9' || echo 0)"
 
     now="$(date +%s)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "$cpu" "$load1" "$mem_pct" "$swap_pct" "$disk_pct" >> "$osample"
+    # Day file resolved per-call so long-lived shells crossing midnight
+    # don't keep appending to yesterday's file. Lock so concurrent
+    # manual runs can't interleave short writes.
+    {
+        flock -n 9 || { warn "sysmon sample already in progress — skipping."; return 0; }
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "$cpu" "$load1" "$mem_pct" "$swap_pct" "$disk_pct" >> "$TSV_DIR/$(date +%F).tsv"
+    } 9>"$TSV_DIR/.lock"
 }
 
 # ── Stats for one day's file ───────────────────────────
@@ -103,31 +110,31 @@ print("\n".join(lines))
 PY
 )"
     echo "$body"
-    if [[ "${POST_DISCORD:-0}" == "1" ]]; then
-        post_discord "$body"
-    fi
+    case "${POST_DISCORD:-0}" in
+        1|true|TRUE|True|yes|YES|Yes) post_discord "$body" ;;
+    esac
 }
 
 post_discord() {
     local token channel
-    token="${DISCORD_BOT_TOKEN:-}"
-    channel="${DISCORD_HOME_CHANNEL:-}"
-    # Cron doesn't inherit .env — pull a bot's values if unset (prefer story).
-    if [[ -z "$token" || -z "$channel" ]]; then
-        token="$(grep -E '^DISCORD_BOT_TOKEN_STORY=' "$REPO/.env" | tail -1 | cut -d= -f2-)"
-        channel="$(grep -E '^DISCORD_HOME_CHANNEL_STORY=' "$REPO/.env" | tail -1 | cut -d= -f2-)"
-    fi
+    # Cron doesn't inherit .env — load_root_env (above) already loaded it;
+    # prefer story bot's scoped values when generic ones are unset.
+    token="${DISCORD_BOT_TOKEN:-${DISCORD_BOT_TOKEN_STORY:-}}"
+    channel="${DISCORD_HOME_CHANNEL:-${DISCORD_HOME_CHANNEL_STORY:-}}"
     if [[ -z "$token" || -z "$channel" ]]; then
         warn "DISCORD_BOT_TOKEN(_STORY) / DISCORD_HOME_CHANNEL(_STORY) not set — skipping Discord post."
         return 1
     fi
-    curl -sf -o /dev/null -X POST \
-        -H "Authorization: Bot $token" \
-        -H "Content-Type: application/json" \
+    # Token passed via curl config on stdin (process substitution), never in
+    # argv — keeps it out of `ps` output.
+    if curl -sf -o /dev/null -X POST -K <(printf 'header = "Authorization: Bot %s"\nheader = "Content-Type: application/json"\n' "$token") \
         -d "$(printf '{"content":%s}' "$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<<"$1")")" \
-        "https://discord.com/api/v10/channels/$channel/messages" \
-        || warn "Discord post failed."
-    info "posted daily report to Discord."
+        "https://discord.com/api/v10/channels/$channel/messages"; then
+        info "posted daily report to Discord."
+    else
+        warn "Discord post failed."
+        return 1
+    fi
 }
 
 # ── Cron management ────────────────────────────────────
@@ -138,18 +145,26 @@ cron_lines() {
 
 install_cron() {
     command -v crontab >/dev/null 2>&1 || { warn "crontab not found"; return 1; }
-    if crontab -l 2>/dev/null | grep -qF "sysmon.sh record"; then
-        info "sysmon cron already installed."
-        return 0
-    fi
-    ( crontab -l 2>/dev/null | grep -vF "sysmon.sh"; cron_lines ) | crontab -
-    info "sysmon cron installed: sample every minute + daily 23:59 report."
+    mkdir -p "$REPO/run"
+    {
+        flock -n 9 || { warn "cron update already in progress — skipping."; return 0; }
+        if crontab -l 2>/dev/null | grep -qF "sysmon.sh record"; then
+            info "sysmon cron already installed."
+            return 0
+        fi
+        ( crontab -l 2>/dev/null | grep -vF "sysmon.sh" || true; cron_lines ) | crontab -
+        info "sysmon cron installed: sample every minute + daily 23:59 report."
+    } 9>"$REPO/run/cron.lock"
 }
 
 remove_cron() {
     if command -v crontab >/dev/null 2>&1; then
-        ( crontab -l 2>/dev/null | grep -vF "sysmon.sh" ) | crontab - || true
-        info "sysmon cron removed."
+        mkdir -p "$REPO/run"
+        {
+            flock -n 9 || { warn "cron update already in progress — skipping."; return 0; }
+            ( crontab -l 2>/dev/null | grep -vF "sysmon.sh" || true ) | crontab - || true
+            info "sysmon cron removed."
+        } 9>"$REPO/run/cron.lock"
     fi
 }
 

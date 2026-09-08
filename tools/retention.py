@@ -8,7 +8,8 @@ docker/docker-compose.yml) and natively via `scripts/retention.sh` (which wraps
   story       git repo (workspace/portals)    — no-op
   resumes     git repo (workspace/resumes)    — no-op
   money       transactions autowiped when the oldest entry is >90 days old
-  food        date-based rows pruned after 30 days; food_weight is NEVER touched
+  health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
+  cookbook    cookbook_ingredients/recipes/cook_log are permanent — no-op
 
 Only the remote MongoDB is touched. Connection comes from MONGODB_URI /
 MONGODB_DB (injected via env by the compose file / root .env).
@@ -52,17 +53,18 @@ def main() -> int:
         db["money_transactions"].delete_many({"date": {"$lt": money_cutoff}})
     print(f"{prefix}money: would remove {money_count} transactions older than {money_cutoff}")
 
-    # ── food: prune date-based rows older than 30 days ───────────
-    # food_weight and food_items are intentionally NOT in this list — kept permanently.
+    # ── health-check: prune hc_meals + hc_days older than 30 days ───
+    # hc_weight is intentionally NOT in this list — kept permanently.
+    # cookbook_* collections are permanent — never touched.
     food_cutoff = (today - datetime.timedelta(days=30)).isoformat()
-    for col in ("food_daily_stats", "food_sleep_log", "food_workouts", "food_meals", "food_meal_items"):
+    for col in ("hc_meals", "hc_days"):
         count = db[col].count_documents({"date": {"$lt": food_cutoff}})
         if not args.dry_run:
             db[col].delete_many({"date": {"$lt": food_cutoff}})
-        print(f"{prefix}food: would remove {count} from {col} older than {food_cutoff}")
+        print(f"{prefix}health-check: would remove {count} from {col} older than {food_cutoff}")
 
-    # ── story / resumes: git repos — no-op ─────────────────────
-    print("[retention] story/resumes: no retention policy (git repos).")
+    # ── story / resumes / cookbook: no-op ───────────────────────
+    print("[retention] story/resumes/cookbook: no retention policy (git repos / permanent).")
     client.close()
     return 0
 

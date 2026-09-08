@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Fully-Dockerized live stack orchestrator.
 #
-# Everything (searxng, health-api, gateway+dashboard (4 bots), retention) — direct to https://opencode.ai/zen/v1, no proxy
+# Everything (searxng, health-api, gateway+dashboard (3 profiles), retention) — direct to https://opencode.ai/zen/v1, no proxy
 # runs as compose services in docker/docker-compose.yml. init self-installs the
 # host tools it needs (curl, docker + compose, python3, cron,
 # opencode), builds the images, seeds the single root .env, copies skills,
@@ -15,7 +15,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUN_DIR="$REPO/run"
 COMPOSE="$REPO/docker/docker-compose.yml"
-BOTS=(story money food resumes)
+BOTS=(story resumes default)
 GATEWAY_HOME="$REPO/profiles/master"
 
 # Multiplex layout: profiles/master is the gateway home; bots are
@@ -64,18 +64,26 @@ install_retention_cron() {
         warn "crontab not found — install cron or run scripts/retention.sh manually."
         return 0
     fi
-    if crontab -l 2>/dev/null | grep -qF "retention.sh run"; then
-        info "Retention cron already installed."
-    else
-        ( crontab -l 2>/dev/null | grep -vF "retention.sh run"; echo "$line" ) | crontab -
-        info "Retention cron installed (daily 03:00): $line"
-    fi
+    mkdir -p "$RUN_DIR"
+    {
+        flock -n 9 || { warn "cron update already in progress — skipping install."; return 0; }
+        if crontab -l 2>/dev/null | grep -qF "retention.sh run"; then
+            info "Retention cron already installed."
+        else
+            ( crontab -l 2>/dev/null | grep -vF "retention.sh run" || true; echo "$line" ) | crontab -
+            info "Retention cron installed (daily 03:00): $line"
+        fi
+    } 9>"$RUN_DIR/cron.lock"
 }
 
 remove_retention_cron() {
     if command -v crontab &>/dev/null; then
-        ( crontab -l 2>/dev/null | grep -vF "retention.sh run" ) | crontab - || true
-        info "Retention cron removed."
+        mkdir -p "$RUN_DIR"
+        {
+            flock -n 9 || { warn "cron update already in progress — skipping removal."; return 0; }
+            ( crontab -l 2>/dev/null | grep -vF "retention.sh run" || true ) | crontab - || true
+            info "Retention cron removed."
+        } 9>"$RUN_DIR/cron.lock"
     fi
 }
 

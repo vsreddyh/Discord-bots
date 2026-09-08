@@ -12,13 +12,15 @@ set -euo pipefail
 #   story       git repo (workspace/portals)   — no-op
 #   resumes     git repo (workspace/resumes)   — no-op
 #   money       transactions autowiped when the oldest entry is >90 days old
-#   food        date-based rows pruned after 30 days; food_weight is NEVER touched
+#   health-check hc_meals + hc_days pruned after 30 days; hc_weight is NEVER touched
+#   cookbook    permanent — no-op
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 COMPOSE="$REPO/docker/docker-compose.yml"
 
 # shellcheck source=scripts/lib/common.sh
 . "$REPO/scripts/lib/common.sh"
+load_root_env
 
 if [[ "${1:-}" == "--dry-run" ]]; then
     docker_compose -f "$COMPOSE" run --rm retention --dry-run

@@ -15,7 +15,7 @@ RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
  && tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz \
  && rm /tmp/s6-overlay-*.tar.xz
 
-RUN --mount=type=cache,target=/root/.cache/pip pip install hermes-agent 'discord.py[voice]==2.7.1' pymongo
+RUN --mount=type=cache,target=/root/.cache/pip pip install hermes-agent 'discord.py[voice]==2.7.1' pymongo mcp python-dotenv requests
 
 RUN python - <<'PY'
 import pathlib, re

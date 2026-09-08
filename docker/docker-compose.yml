@@ -50,7 +50,7 @@ services:
   # ──────────────────────────────────────────────────────
   # Health Connect sync endpoint (Android app → MongoDB).
   # MONGODB_URI/HEALTH_SYNC_TOKEN from root .env; posts to Discord using
-  # the food bot's token/channel.
+  # the default (god) bot's token/channel (food MCP lives there now).
   # ──────────────────────────────────────────────────────
   health-api:
     build:
@@ -62,8 +62,8 @@ services:
       MONGODB_URI: ${MONGODB_URI:-}
       MONGODB_DB: ${MONGODB_DB:-hermes}
       HEALTH_SYNC_TOKEN: ${HEALTH_SYNC_TOKEN:-}
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_FOOD:-}
-      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_FOOD:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN_DEFAULT:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL_DEFAULT:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -73,8 +73,8 @@ services:
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────
-  # Multiplexed bot gateway — ONE container serves 4 bots + dashboard.
-  # HERMES_HOME (profiles/master) is the gateway home; story/money/
+  # Multiplexed bot gateway — ONE container serves story + resumes profiles
+  # + default (god) profile with money/food MCPs. HERMES_HOME (profiles/master) is the gateway home; story/money/
   # food/resumes are named profiles under profiles/master/profiles/. The
   # entrypoint renders each profile's config + writes each profile's .env
   # (Discord token/channel) from these env vars, which Hermes reads as
@@ -100,6 +100,10 @@ services:
       - ../profiles/master:/hermes-home
       - ../workspace:/workspace
       - ../tools:/tools:ro
+      - ../mcps/common:/mcps/common:ro
+      - ../mcps/cookbook:/mcps/cookbook:ro
+      - ../mcps/health_check:/mcps/health_check:ro
+      - ../mcps/money:/mcps/miser-money:ro
     environment:
       <<: *bot-base-environment
       HERMES_DASHBOARD: ${HERMES_DASHBOARD:-1}
@@ -110,13 +114,12 @@ services:
       HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
       DISCORD_BOT_TOKEN_STORY: ${DISCORD_BOT_TOKEN_STORY:-}
       DISCORD_HOME_CHANNEL_STORY: ${DISCORD_HOME_CHANNEL_STORY:-}
-      DISCORD_BOT_TOKEN_MONEY: ${DISCORD_BOT_TOKEN_MONEY:-}
-      DISCORD_HOME_CHANNEL_MONEY: ${DISCORD_HOME_CHANNEL_MONEY:-}
-      DISCORD_BOT_TOKEN_FOOD: ${DISCORD_BOT_TOKEN_FOOD:-}
-      DISCORD_HOME_CHANNEL_FOOD: ${DISCORD_HOME_CHANNEL_FOOD:-}
       DISCORD_BOT_TOKEN_RESUMES: ${DISCORD_BOT_TOKEN_RESUMES:-}
       DISCORD_HOME_CHANNEL_RESUMES: ${DISCORD_HOME_CHANNEL_RESUMES:-}
-      USDA_API_KEY: ${USDA_API_KEY:-}
+      DISCORD_BOT_TOKEN_DEFAULT: ${DISCORD_BOT_TOKEN_DEFAULT:-}
+      DISCORD_HOME_CHANNEL_DEFAULT: ${DISCORD_HOME_CHANNEL_DEFAULT:-}
+      MONEY_DEFAULT_ACCOUNT: ${MONEY_DEFAULT_ACCOUNT:-Cash}
+      PYTHONPATH: /mcps
 
   # ──────────────────────────────────────────────────────
   # Retention — one-shot data lifecycle job, run via cron
@@ -140,17 +143,40 @@ services:
   # scripts/lib/common.sh when HERMES_ENV=dev). Prod never starts this.
   # No volume — fully ephemeral (data lost on `down`/`restart`), which is
   # intentional for temporary dev use.
+  # Runs as a single-node replica set (rs0, initiated by mongodb-init
+  # below) so multi-doc transactions work in dev exactly like prod Atlas.
   mongodb:
     image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping')\""]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 10s
     profiles:
       - dev
+
+  # One-shot replica-set initiator for the dev mongodb (see above).
+  # Exits 0 once rs.initiate() succeeds or the set is already initiated.
+  mongodb-init:
+    image: mongo:7
+    profiles:
+      - dev
+    depends_on:
+      - mongodb
+    entrypoint:
+      - bash
+      - -c
+      - |
+        for i in $$(seq 1 30); do
+          if mongosh --host mongodb --quiet --eval 'try { rs.initiate() } catch (e) { if (e.codeName !== "AlreadyInitialized") throw e }'; then
+            break
+          fi
+          sleep 2
+        done
+    restart: "no"
 
 volumes:
   searxng_data:

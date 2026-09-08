@@ -55,7 +55,7 @@ PY
 
 write_profile_env() {
     # Write one profile's .env with its own Discord creds. $1 = home,
-    # $2 = profile name (story/money/food/resumes).
+    # $2 = profile name (story/resumes/default).
     local home="$1" name="$2" envf
     envf="$home/.env"
     # Mapping is deterministic: DISCORD_BOT_TOKEN_<NAME upper> in the
@@ -81,13 +81,10 @@ do_render() {
     export HERMES_CWD="${HERMES_CWD:-/workspace}"
     render_config "$HERMES_HOME"
 
-    # ── Named profiles (story, money, food, resumes) ───────
+    # ── Named profiles (story, resumes, default-god) ───────
     for home in "$HERMES_HOME"/profiles/*/; do
         [[ -d "$home" ]] || continue
         name="$(basename "$home")"
-        # Hermes auto-creates profiles/default/ for the dashboard/gateway; it is
-        # not a bot profile, so skip it.
-        [[ "$name" == "default" ]] && continue
         upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
         tokv="DISCORD_BOT_TOKEN_${upper}"
         chv="DISCORD_HOME_CHANNEL_${upper}"
@@ -95,7 +92,11 @@ do_render() {
         # renders correctly for named profiles (was previously hardcoded).
         export DISCORD_HOME_CHANNEL="${!chv:-}"
         export DISCORD_BOT_TOKEN="${!tokv:-}"
-        HERMES_CWD="/workspace/$name" render_config "$home"
+        if [[ "$name" == "default" ]]; then
+            HERMES_CWD="/workspace" render_config "$home"
+        else
+            HERMES_CWD="/workspace/$name" render_config "$home"
+        fi
         write_profile_env "$home" "$name"
     done
 
