@@ -73,7 +73,9 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - LLM: direct to OpenCode Zen (`https://opencode.ai/zen/v1`, model `muse-spark-1.2-free`) — no proxy container.
 - App API: Hermes built-in OpenAI-compatible server on the gateway
   (`gateway.api_server`, `:8642`, shared `API_SERVER_KEY`); one port, each app
-  tab sends its profile's model name. Verify names live via `GET /v1/models`.
+  tab uses its profile path (`/p/story|resumes|default`) and sends per-request
+  provider (`opencode`|`deepinfra`) + model from app Settings. Provider keys
+  live only in the VPS `.env`, never in git.
 - Bot config source is `profiles/master/config.yaml.template` (gateway home,
   not a bot) and `profiles/master/profiles/<bot>/config.yaml.template` (the three
   domain profiles — nested because Hermes multiplexes named profiles under the

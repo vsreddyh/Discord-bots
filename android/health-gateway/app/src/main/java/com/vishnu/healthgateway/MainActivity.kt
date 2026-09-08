@@ -88,8 +88,10 @@ private fun ChatTab(app: android.app.Application, tab: String, title: String) {
     // Keyed per tab — otherwise all three tabs would share one ViewModel.
     val vm: ChatViewModel = viewModel(key = "chat_$tab", factory = factory)
     val state by vm.state
-    LaunchedEffect(Unit) { vm.refreshModel() }
-    ChatScreen(title = title, model = state.model.ifEmpty { defaultModel(tab) }, state = state,
+    LaunchedEffect(Unit) { vm.refreshConfig() }
+    val subtitle = (if (state.model.isEmpty()) "gateway default" else state.model) +
+        " · " + state.provider.id
+    ChatScreen(title = title, model = subtitle, state = state,
         onPending = vm::onPending, onSend = vm::send, onStop = vm::stop, onNew = vm::newConversation)
 }
 
@@ -177,6 +179,63 @@ private fun ChatScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun TabLlmConfig(
+    tabTitle: String,
+    provider: LlmProvider,
+    onProvider: (LlmProvider) -> Unit,
+    model: String,
+    onModel: (String) -> Unit,
+    path: String,
+    onPath: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Text("$tabTitle tab", style = MaterialTheme.typography.titleSmall)
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+    ) {
+        OutlinedTextField(
+            value = provider.id,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Provider") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            LlmProvider.entries.forEach { p ->
+                DropdownMenuItem(
+                    text = { Text(p.id) },
+                    onClick = { onProvider(p); expanded = false },
+                )
+            }
+        }
+    }
+    OutlinedTextField(
+        value = model,
+        onValueChange = onModel,
+        label = { Text("Model (blank = gateway default)") },
+        placeholder = { Text("muse-spark-1.2-free") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = path,
+        onValueChange = onPath,
+        label = { Text("Profile path (blank = default below)") },
+        placeholder = {
+            Text(if (tabTitle == "God") "/p/default" else "/p/" + tabTitle.lowercase())
+        },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val state by viewModel.state
     val context = LocalContext.current
@@ -184,9 +243,16 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
     var apiBase by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
+    // Per-tab LLM config: provider + model (+ profile path override).
+    var providerStory by remember { mutableStateOf(LlmProvider.OPENCODE) }
     var modelStory by remember { mutableStateOf("") }
+    var pathStory by remember { mutableStateOf("") }
+    var providerResumes by remember { mutableStateOf(LlmProvider.OPENCODE) }
     var modelResumes by remember { mutableStateOf("") }
+    var pathResumes by remember { mutableStateOf("") }
+    var providerGod by remember { mutableStateOf(LlmProvider.OPENCODE) }
     var modelGod by remember { mutableStateOf("") }
+    var pathGod by remember { mutableStateOf("") }
     var modelsResult by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -194,9 +260,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
         // serverUrl/authToken fields below are the health-sync ones (unchanged keys).
         apiBase = prefs.getString("api_base_url", "") ?: ""
         apiKey = prefs.getString("api_key", "") ?: ""
+        providerStory = LlmProvider.fromId(prefs.getString("provider_story", "") ?: "")
         modelStory = prefs.getString("model_story", "") ?: ""
+        pathStory = prefs.getString("path_story", "") ?: ""
+        providerResumes = LlmProvider.fromId(prefs.getString("provider_resumes", "") ?: "")
         modelResumes = prefs.getString("model_resumes", "") ?: ""
+        pathResumes = prefs.getString("path_resumes", "") ?: ""
+        providerGod = LlmProvider.fromId(prefs.getString("provider_god", "") ?: "")
         modelGod = prefs.getString("model_god", "") ?: ""
+        pathGod = prefs.getString("path_god", "") ?: ""
     }
 
     val hcPermissionLauncher = rememberLauncherForActivityResult(
@@ -235,50 +307,66 @@ fun SettingsScreen(viewModel: MainViewModel) {
         OutlinedTextField(
             value = apiKey,
             onValueChange = { apiKey = it },
-            label = { Text("API key (shared)") },
+            label = { Text("API key (gateway, shared)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
-            value = modelStory,
-            onValueChange = { modelStory = it },
-            label = { Text("Story model") },
-            placeholder = { Text("story") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+        TabLlmConfig(
+            tabTitle = "Story",
+            provider = providerStory,
+            onProvider = { providerStory = it },
+            model = modelStory,
+            onModel = { modelStory = it },
+            path = pathStory,
+            onPath = { pathStory = it },
         )
-        OutlinedTextField(
-            value = modelResumes,
-            onValueChange = { modelResumes = it },
-            label = { Text("Resumes model") },
-            placeholder = { Text("resumes") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+        TabLlmConfig(
+            tabTitle = "Resumes",
+            provider = providerResumes,
+            onProvider = { providerResumes = it },
+            model = modelResumes,
+            onModel = { modelResumes = it },
+            path = pathResumes,
+            onPath = { pathResumes = it },
         )
-        OutlinedTextField(
-            value = modelGod,
-            onValueChange = { modelGod = it },
-            label = { Text("God model") },
-            placeholder = { Text("default") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+        TabLlmConfig(
+            tabTitle = "God",
+            provider = providerGod,
+            onProvider = { providerGod = it },
+            model = modelGod,
+            onModel = { modelGod = it },
+            path = pathGod,
+            onPath = { pathGod = it },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
-                ChatApi(context).setChatConfig(apiBase, apiKey, modelStory, modelResumes, modelGod)
+                val api = ChatApi(context)
+                api.setChatConfig(apiBase, apiKey, "story", providerStory, modelStory, pathStory)
+                api.setChatConfig(apiBase, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
+                api.setChatConfig(apiBase, apiKey, "god", providerGod, modelGod, pathGod)
                 modelsResult = "Saved."
             }, modifier = Modifier.weight(1f)) {
                 Text("Save chat config")
             }
             OutlinedButton(onClick = {
-                ChatApi(context).setChatConfig(apiBase, apiKey, modelStory, modelResumes, modelGod)
+                val api = ChatApi(context)
+                api.setChatConfig(apiBase, apiKey, "story", providerStory, modelStory, pathStory)
+                api.setChatConfig(apiBase, apiKey, "resumes", providerResumes, modelResumes, pathResumes)
+                api.setChatConfig(apiBase, apiKey, "god", providerGod, modelGod, pathGod)
                 modelsResult = "Checking…"
                 scope.launch {
-                    val r = ChatApi(context).listModels()
-                    modelsResult = r.fold(
-                        onSuccess = { ids -> if (ids.isEmpty()) "No models returned." else "Models: ${ids.joinToString()}" },
-                        onFailure = { e -> "FAILED — ${e.message}" },
-                    )
+                    val paths = listOf(
+                        api.pathFor("story"), api.pathFor("resumes"), api.pathFor("god"),
+                    ).distinct()
+                    val parts = mutableListOf<String>()
+                    for (p in paths) {
+                        val r = api.listModels(p)
+                        parts.add("$p: " + r.fold(
+                            onSuccess = { ids -> if (ids.isEmpty()) "(none)" else ids.joinToString() },
+                            onFailure = { e -> "FAILED — ${e.message}" },
+                        ))
+                    }
+                    modelsResult = parts.joinToString("\n")
                 }
             }, modifier = Modifier.weight(1f)) {
                 Text("Check models")

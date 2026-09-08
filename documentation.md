@@ -170,14 +170,14 @@ Android Health Gateway App ──POST /api/health/sync──► health-api (:800
 The custom Android app (`android/health-gateway/`, 3 chat tabs + Settings) talks to Hermes's built-in OpenAI-compatible API server on the gateway (`:8642`, one port, shared `API_SERVER_KEY` bearer key):
 
 ```bash
-curl http://<host>:8642/v1/models -H "Authorization: Bearer <API_SERVER_KEY>"
-curl http://<host>:8642/v1/chat/completions \
+curl http://<host>:8642/p/story/v1/models -H "Authorization: Bearer <API_SERVER_KEY>"
+curl http://<host>:8642/p/story/v1/chat/completions \
   -H "Authorization: Bearer <API_SERVER_KEY>" -H "Content-Type: application/json" \
-  -d '{"model": "<profile-name>", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
+  -d '{"provider": "opencode", "model": "muse-spark-1.2-free", "messages": [{"role": "user", "content": "hi"}], "stream": true}'
 ```
 
-- Each tab sends its profile's model name — **verify live via `GET /v1/models`**, which is the source of truth for model names under multiplex (expected: one entry per profile).
-- If multiplex serves only one model, split into 3 gateway services with per-profile `api_server` ports instead (app code is unchanged — only base URL/model mapping differs).
+- One port for all tabs; each tab talks to its profile path (`/p/story`, `/p/resumes`, `/p/default` — overridable per tab in app Settings). **Verify live via `GET /p/<profile>/v1/models`**, the source of truth under multiplex.
+- Provider (`opencode` | `deepinfra`) + model are picked per request in app Settings (blank model = gateway default). Provider keys live ONLY in the git-ignored root `.env` on the VPS — never in git.
 - Config lives in `profiles/master/config.yaml.template` (`gateway.api_server`, key rendered from `API_SERVER_KEY`); port published in `docker/docker-compose.yml` (`${API_SERVER_PORT:-8642}:8642`).
 
 ---

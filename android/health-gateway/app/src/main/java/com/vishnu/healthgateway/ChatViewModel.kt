@@ -9,7 +9,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class ChatUiState(
+    val provider: LlmProvider = LlmProvider.OPENCODE,
     val model: String = "",
+    val path: String = "",
     val messages: List<ChatMessage> = emptyList(),
     val streaming: Boolean = false,
     val pending: String = "",
@@ -24,13 +26,23 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
 
     private val api = ChatApi(app)
 
-    private val _state = mutableStateOf(ChatUiState(model = api.modelFor(tab)))
+    private val _state = mutableStateOf(
+        ChatUiState(
+            provider = api.providerFor(tab),
+            model = api.modelFor(tab),
+            path = api.pathFor(tab),
+        )
+    )
     val state: State<ChatUiState> = _state
 
     private var streamJob: Job? = null
 
-    fun refreshModel() {
-        _state.value = _state.value.copy(model = api.modelFor(tab))
+    fun refreshConfig() {
+        _state.value = _state.value.copy(
+            provider = api.providerFor(tab),
+            model = api.modelFor(tab),
+            path = api.pathFor(tab),
+        )
     }
 
     fun onPending(v: String) {
@@ -52,7 +64,11 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
     fun send() {
         val text = _state.value.pending.trim()
         if (text.isEmpty() || _state.value.streaming) return
+        // Re-read per-tab config at send time so Settings edits apply instantly.
+        val provider = api.providerFor(tab)
         val model = api.modelFor(tab)
+        val path = api.pathFor(tab)
+        _state.value = _state.value.copy(provider = provider, model = model, path = path)
         val history = _state.value.messages + ChatMessage("user", text)
         _state.value = _state.value.copy(messages = history, pending = "", streaming = true, error = "")
         // Placeholder assistant message that deltas append to.
@@ -60,7 +76,7 @@ class ChatViewModel(app: Application, val tab: String) : AndroidViewModel(app) {
         val acc = StringBuilder()
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
-            api.streamChat(model, history).collect { event ->
+            api.streamChat(path, provider, model, history).collect { event ->
                 when (event) {
                     is ChatEvent.Delta -> {
                         acc.append(event.text)
