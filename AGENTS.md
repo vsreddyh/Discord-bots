@@ -50,8 +50,8 @@ workspace/portals (lore vault, repo vsreddyh/portals) + workspace/resumes (repo 
 - `scripts/hermes.sh` = single entry point (`init|start|stop|restart|status|clean`),
   a thin Docker orchestrator over `docker/docker-compose.yml`. No host installs.
   `init` self-installs the host tools it needs: **docker + compose, curl,
-  python3, cron, opencode CLI** (only git + sudo must pre-exist). Skip
-  opencode with `HERMES_NO_OPENCODE=1`. Dashboard (:9119) and health-api (:8001) bind `0.0.0.0` inside Docker.
+  python3, cron** (only git + sudo must pre-exist). Hermes harness only —
+  `init` never installs the opencode CLI. Dashboard (:9119) and health-api (:8001) bind `0.0.0.0` inside Docker.
 - `scripts/retention.sh` = wrapper for the one-shot `retention` service
   (`docker compose run --rm retention` → `tools/retention.py`); cron daily 03:00
    installed by `init`, also runs on every `start`. money wipes transactions >90d;

@@ -5,11 +5,13 @@ set -euo pipefail
 #
 # Everything (searxng, health-api, gateway+dashboard (3 profiles), retention) — direct to https://opencode.ai/zen/v1, no proxy
 # runs as compose services in docker/docker-compose.yml. init self-installs the
-# host tools it needs (curl, docker + compose, python3, cron,
-# opencode), builds the images, seeds the single root .env, copies skills,
+# host tools it needs (curl, docker + compose, python3, cron),
+# builds the images, seeds the single root .env, copies skills,
 # and installs the retention cron. Only git + sudo must pre-exist.
 # All env lives in the root .env (no per-profile .env files).
 # No host Hermes install, venvs, or native processes.
+# NOTE: Hermes harness only — this script never installs the opencode CLI
+# (LLM traffic goes direct to OpenCode Zen over HTTPS; no CLI needed).
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -40,7 +42,7 @@ usage() {
 Usage: $(basename "$0") <command>
 
 Commands:
-  init       Build images, seed the root .env (all env vars) + skills, set up host tools (opencode, python), install retention cron
+  init       Build images, seed the root .env (all env vars) + skills, set up host tools (curl, docker, python, cron), install retention cron
   start      Start the whole Docker stack (searxng, health-api, gateway+dashboard (4 bots))
   stop       Stop the Docker stack
   restart    Stop then start
@@ -88,7 +90,7 @@ remove_retention_cron() {
 }
 
 # ────────────────────────────────────────────────────────────
-# HOST TOOLS (docker, curl, python, cron, opencode)
+# HOST TOOLS (docker, curl, python, cron)
 # ────────────────────────────────────────────────────────────
 # apt-install <pkgs...> — runs apt-get install, prints output indented, and
 # returns apt's real exit code (the pipe to sed must not mask failures).
@@ -145,7 +147,7 @@ pkg_install() {
 
 ensure_curl() {
     command -v curl &>/dev/null && return 0
-    info "curl not found — installing (needed by opencode installer)."
+    info "curl not found — installing (needed for healthchecks and image builds)."
     pkg_install curl || { warn "curl install failed — install curl manually."; return 1; }
     info "curl installed."
 }
@@ -200,36 +202,6 @@ ensure_cron() {
     info "cron installed."
 }
 
-ensure_opencode() {
-    [[ "${HERMES_NO_OPENCODE:-0}" == "1" ]] && { info "opencode install skipped (HERMES_NO_OPENCODE=1)."; return 0; }
-    if command -v opencode &>/dev/null; then
-        info "opencode already installed ($(opencode --version 2>/dev/null || echo '?'))."
-        return 0
-    fi
-    ensure_curl || return 1
-    info "Installing opencode CLI..."
-    if ! curl -fsSL https://opencode.ai/install | bash; then
-        warn "opencode install failed — install manually: https://opencode.ai/docs/install"
-        return 1
-    fi
-    if ! command -v opencode &>/dev/null; then
-        # The installer drops the binary in ~/.opencode/bin, which may not be
-        # on PATH for non-interactive shells — symlink it into /usr/local/bin.
-        local bin=""
-        for c in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
-            [[ -x "$c" ]] && { bin="$c"; break; }
-        done
-        if [[ -n "$bin" ]]; then
-            info "opencode installed to $bin — symlinking into /usr/local/bin."
-            sudo ln -sf "$bin" /usr/local/bin/opencode
-        else
-            warn "opencode install path not found — install manually: https://opencode.ai/docs/install"
-            return 1
-        fi
-    fi
-    info "opencode installed: $(opencode --version 2>/dev/null)."
-}
-
 # ────────────────────────────────────────────────────────────
 # INIT
 # ────────────────────────────────────────────────────────────
@@ -248,7 +220,6 @@ cmd_init() {
     ensure_curl || true
     ensure_docker || true
     ensure_python || true
-    ensure_opencode || true
     ensure_cron || true
 
     info "Building Docker images (bot image, health-api)..."

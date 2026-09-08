@@ -110,7 +110,7 @@ Dashboard is accessible at `http://<host>:9119` using credentials configured via
 
 | Command | Action |
 |---|---|
-| `./scripts/hermes.sh init` | Self-installs host deps (curl, docker + compose, python3, cron, opencode CLI), builds images, creates directories, copies skills, sets up cron. |
+| `./scripts/hermes.sh init` | Self-installs host deps (curl, docker + compose, python3, cron), builds images, creates directories, copies skills, sets up cron. Hermes harness only — never installs the opencode CLI. |
 | `./scripts/hermes.sh start` | Starts all services (`docker compose up -d --build`) and runs retention once. |
 | `./scripts/hermes.sh stop` | Shuts down the stack (`docker compose down`). |
 | `./scripts/hermes.sh restart` | Performs a clean stop and start sequence. |
